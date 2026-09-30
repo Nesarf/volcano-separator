@@ -1,0 +1,14 @@
+# 生成物：由 `volcano-separator install-service` 按本机路径写出
+bin/guard-task.cmd
+
+# 依赖（本项目零第三方依赖，留个口子以防以后引入）
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# 运行时产物
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

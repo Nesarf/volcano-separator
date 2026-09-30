@@ -1,0 +1,57 @@
+{
+  "name": "volcano-separator",
+  "version": "1.0.0",
+  "description": "Separates the three things that were welded together: uv (env build), the daemon (service process) and hindsight (data + service). Staged, so no watchdog ever races a build -- warm with no watchdog, serve in seconds, watch on a heartbeat.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nesarf/volcano-separator.git"
+  },
+  "homepage": "https://github.com/Nesarf/volcano-separator#readme",
+  "bugs": {
+    "url": "https://github.com/Nesarf/volcano-separator/issues"
+  },
+  "author": "Nesarf",
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "bin": {
+    "volcano-separator": "bin/cli.mjs",
+    "vsep": "bin/cli.mjs"
+  },
+  "exports": {
+    ".": "./lib/core.mjs",
+    "./core": "./lib/core.mjs",
+    "./mcp": "./lib/mcp.mjs"
+  },
+  "files": [
+    "lib/**",
+    "bin/**",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "status": "node bin/cli.mjs status",
+    "heal": "node bin/cli.mjs heal",
+    "doctor": "node bin/cli.mjs doctor",
+    "mcp": "node lib/mcp.mjs"
+  },
+  "dependencies": {},
+  "keywords": [
+    "hindsight",
+    "uv",
+    "daemon",
+    "supervisor",
+    "memory",
+    "dsh",
+    "mcp"
+  ]
+}
