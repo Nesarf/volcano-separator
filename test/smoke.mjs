@@ -49,6 +49,8 @@ const expected = [
   'probeUv',
   'probePort',
   'probeDaemon',
+  'probeDaemonLog',
+  'probePostgres',
   'probeEnv',
   'warm',
   'serve',
@@ -89,6 +91,16 @@ ok('probeDaemon reports the port', String(dead.detail).includes(String(DEAD_PORT
 
 const tree = await g.killDaemonTree(ctx, {})
 ok('killDaemonTree on a dead port is a no-op', tree.killed.length === 0 && tree.ok === true)
+
+// The two probes that catch a daemon which is "up" but not working.
+const pgDead = await g.probePostgres({ ...ctx, pgPort: DEAD_PORT })
+ok('probePostgres on a dead port -> ok:false', pgDead.ok === false, pgDead.detail)
+ok('probePostgres reports the port', String(pgDead.detail).includes(String(DEAD_PORT)), pgDead.detail)
+
+const noLog = await g.probeDaemonLog({ ...ctx, profileLogFile: join(projectDir, 'no-such-log.log') })
+ok('probeDaemonLog with no log -> ok:true (absence is not a failure)', noLog.ok === true)
+ok('probeDaemonLog reports it is unavailable', noLog.available === false)
+ok('probeDaemonLog counts zero errors', noLog.fresh === 0 && noLog.count === 0)
 
 // ── 4. the cache guardrail ───────────────────────────────────────────────────
 section('cache guardrail')

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.1 — 2026-09-30
+
+Found the same day, by the tool failing to notice its own service misbehaving.
+
+**"The port answers" is not the same as "it works".** The daemon kept `/health` green while it
+could not reach Postgres: a saturated disk (a background file purge of mine) made the asyncpg
+connection handshake time out 48 times, and every memory write stalled with no visible reason.
+`status` reported the whole chain healthy throughout. The lesson is exactly the one this tool
+exists for -- an "up" signal that does not mean "working" is worse than no signal.
+
+**Added**
+
+- `probePostgres` — TCP probe of the daemon's Postgres port plus a check that the embedded
+  instance's data directory exists.
+- `probeDaemonLog` — scans the daemon's own log for `db-timeout` / `refused` / `error` lines.
+  It reads only the tail (these logs rotate at ~100 MB) and uses **two windows**: errors in the
+  last `logErrorWindowMinutes` (default 5) mean the service is failing *now* and drive health,
+  while the older `logWindowMinutes` (default 30) window is reported as context. An incident that
+  has already recovered shows up as `quiet for 5 min; N earlier (recovered)` and does **not** keep
+  the chain marked unhealthy -- otherwise the signal becomes noise.
+- `status` now fails when the daemon is up but its database is unreachable, and prints the most
+  recent daemon-log errors with a note that a saturated disk is enough to cause it.
+
+**Changed**
+
+- `status --json` gained `postgres` and `log` sections; `database` now also reports `listening`.
+
 ## 1.0.0 — 2026-09-30
 
 First release. Extracted from a real failure on a machine where the Hindsight daemon

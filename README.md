@@ -56,7 +56,7 @@ npm link            # provides `volcano-separator` and `vsep`
 ## Usage
 
 ```bash
-volcano-separator status            # whole-chain check (uv / env warmth / daemon / db / watchdog task)
+volcano-separator status            # whole-chain check (uv / env warmth / daemon / pg / daemon-log errors / watchdog)
 volcano-separator heal              # intelligent repair: warm -> serve -> watch
 volcano-separator warm [--force]    # warm the env only (no watchdog)
 volcano-separator serve             # start the service only
@@ -87,7 +87,7 @@ MCP client config:
 }
 ```
 
-## Two real traps it handles for you
+## Three real traps it handles for you
 
 **1. The daemon's code lives inside the uv cache.**
 So `uv cache clean` / `prune` is blocked by the running daemon's in-use lock, and `--force` deletes the running daemon's own files out from under it. Worse, while it is alive the cache directory cannot even be renamed (access denied).
@@ -103,6 +103,9 @@ Failed to stop daemon
 ```
 
 `stop` therefore has two levels: the official path first, then **find the port owner and collect its process tree** (only `uv`/`uvx`/`python`/`hindsight` processes — never anything else). Without that layer, one plugin-spawned daemon would make the supervisor permanently unable to stop it.
+
+**3. "The port answers" is not the same as "it works".**
+A daemon can keep `/health` green while being unable to reach its database. Observed in the wild: a saturated disk (a background file purge) made the daemon's Postgres connection handshake time out 48 times, the port never blinked, and every memory write stalled with no visible reason. That is why `status` also probes Postgres *and* scans the daemon's own log for errors — and why it uses **two windows**: errors in the last 5 minutes mean it is failing *now*, while anything older is reported as context (`recovered`) so a past incident does not keep the chain marked unhealthy forever.
 
 ## Design boundaries
 
