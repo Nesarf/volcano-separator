@@ -1,7 +1,7 @@
 {
   "name": "volcano-separator",
   "version": "1.0.0",
-  "description": "Separates the three things that were welded together: uv (env build), the daemon (service process) and hindsight (data + service). Staged, so no watchdog ever races a build -- warm with no watchdog, serve in seconds, watch on a heartbeat.",
+  "description": "Decouples uv, the Hindsight daemon and its data from one fragile chain: warm with no watchdog, serve in seconds, watch on a heartbeat.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -50,8 +50,17 @@
     "uv",
     "daemon",
     "supervisor",
-    "memory",
-    "dsh",
-    "mcp"
+    "watchdog",
+    "self-healing",
+    "health-check",
+    "mcp",
+    "model-context-protocol",
+    "cli",
+    "nodejs",
+    "windows",
+    "scheduled-tasks",
+    "deepseek-harness",
+    "reliability",
+    "developer-tools"
   ]
 }
