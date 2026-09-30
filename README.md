@@ -1,5 +1,7 @@
 # Volcano Separator
 
+[![CI](https://github.com/Nesarf/volcano-separator/actions/workflows/ci.yml/badge.svg)](https://github.com/Nesarf/volcano-separator/actions/workflows/ci.yml)
+
 **Separates the three things that were welded together.**
 
 `volcano-separator` is a supervisor for the Hindsight memory daemon. It does not fix a bug — it fixes a **structural fragility**:
@@ -130,6 +132,18 @@ Platform note: the scheduled-task integration is Windows-only today (`schtasks` 
 ## Requirements
 
 Node >= 20.12. Zero third-party dependencies.
+
+## Tests
+
+```bash
+node test/smoke.mjs      # or: npm test
+```
+
+The smoke test is deliberately **offline**: no network, no `uv`, no running daemon. It asserts the
+properties that matter for a supervisor — that the module loads, that every probe *degrades*
+instead of throwing when its dependency is missing, that the cache guardrail says "safe" when
+nothing is running, and that the CLI's exit codes behave. CI runs it on Node 20 and 22, on Linux
+and Windows.
 
 ## License
 

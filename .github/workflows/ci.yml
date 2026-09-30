@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Superseded runs on the same ref are pointless for a repo this size.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The staging model is portable; the scheduled-task integration is Windows-only,
+        # so both platforms are worth exercising.
+        os: [ubuntu-latest, windows-latest]
+        node: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Node version
+        run: node --version
+
+      # Literally a syntax self-check: parse every source file without running it.
+      - name: Syntax check
+        shell: bash
+        run: |
+          set -e
+          for f in lib/*.mjs bin/*.mjs test/*.mjs; do
+            node --check "$f"
+            echo "parsed  $f"
+          done
+
+      # Offline: no network, no uv, no hindsight daemon required.
+      - name: Smoke test
+        run: node test/smoke.mjs

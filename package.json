@@ -39,6 +39,8 @@
     "node": ">=20.12"
   },
   "scripts": {
+    "test": "node test/smoke.mjs",
+    "syntax": "node --check lib/core.mjs && node --check lib/mcp.mjs && node --check bin/cli.mjs",
     "status": "node bin/cli.mjs status",
     "heal": "node bin/cli.mjs heal",
     "doctor": "node bin/cli.mjs doctor",

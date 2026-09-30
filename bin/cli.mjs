@@ -87,7 +87,8 @@ async function main() {
 
   if (!cmd || opts.help) {
     console.log(HELP)
-    process.exit(cmd ? 0 : 1)
+    // An explicit --help is a success; being invoked with no command at all is a usage error.
+    process.exit(opts.help ? 0 : 1)
   }
 
   const ctx = g.resolveContext({
