@@ -41,6 +41,7 @@ function parseArgs(argv) {
     else if (a === '--no-suspend') opts['no-suspend'] = true
     else if (a === '--no-topmost') opts['no-topmost'] = true
     else if (a === '--signals') opts.signals = true
+    else if (a === '--redline') opts.redline = true
     else if (a === '--record') opts.record = true
     else if (a === '--show') opts.show = true
     else if (a === '--all') opts.all = true
@@ -82,6 +83,7 @@ Commands:
   stop | restart
   activity [n]       the system-wide process/window/persistence record (default last 40)
   busy [minutes]     what has actually been running, grouped (runs, location, allowlist)
+  redline [seconds]  what is sitting on C: in user-writable space (--record keeps findings)
   signals [minutes]  what looks like stealth, with evidence (observe-only)
   decide [minutes]   what would be done about each signal -- still acts on nothing (--record keeps open questions)
   reveal windows [--show] [--all] [--filter re]   every top-level window; --show forces hidden ones visible
@@ -203,13 +205,37 @@ async function main() {
           sig = { error: String(e?.message ?? e) }
         }
       }
+      // The C: red-line check is automatic but not frequent: a full walk is seconds to tens of
+      // seconds, which is not something to spend every five minutes. Twelve hours is often enough to
+      // notice a new violation and rare enough to stay invisible.
+      let rl = null
+      if (opts.redline) {
+        try {
+          const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('node:fs')
+          mkdirSync(ctx.logDir, { recursive: true })
+          const stamp = join(ctx.logDir, 'redline.last')
+          const last = existsSync(stamp) ? Number(readFileSync(stamp, 'utf8').trim()) : 0
+          const dueMs = 12 * 60 * 60 * 1000
+          if (Date.now() - last >= dueMs) {
+            const scan = await g.scanRedline(ctx, { budgetMs: 30000, top: 15 })
+            const rec = g.recordRedline(ctx, scan)
+            writeFileSync(stamp, String(Date.now()), 'utf8')
+            rl = { gb: scan.gb, flagged: scan.flagged.length, fresh: rec.written, truncated: scan.truncated }
+          }
+        } catch (e) {
+          rl = { error: String(e?.message ?? e) }
+        }
+      }
+
       const verdict = r.skipped
         ? `skipped(${r.reason})`
-        : r.ok
-          ? r.fastPath
-            ? 'healthy'
-            : 'repaired'
-          : `FAILED@${r.failedAt}`
+        : r.deferred
+          ? `deferred@${r.deferredAt}`
+          : r.ok
+            ? r.fastPath
+              ? 'healthy'
+              : 'repaired'
+            : `FAILED@${r.failedAt}`
       try {
         const { appendFileSync, mkdirSync } = await import('node:fs')
         mkdirSync(ctx.logDir, { recursive: true })
@@ -219,6 +245,7 @@ async function main() {
             `uv=${ctx.uvx ? 'y' : 'n'} profile=${ctx.profile} ` +
             `${r.steps?.length ? '| ' + r.steps.map((st) => st.step).join('>') : ''}` +
             `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh) : ''}` +
+            `${rl ? ' | cdisk=' + (rl.error ? 'ERROR' : rl.gb + 'GB/flagged:' + rl.flagged + '/new:' + rl.fresh) : ''}` +
             '\n',
         )
       } catch {
@@ -523,6 +550,30 @@ async function main() {
       }
       console.log('')
       console.log(C.dim('  recording is not transparency -- this is the view that answers "what ran here"'))
+      break
+    }
+
+    case 'redline': {
+      const budget = Number(opts._[1] ?? 45)
+      const r = await g.scanRedline(ctx, { budgetMs: (Number.isFinite(budget) ? budget : 45) * 1000, top: opts.all ? 40 : 12 })
+      let rec = null
+      if (opts.record && r.flagged.length) rec = g.recordRedline(ctx, r)
+      if (opts.json) return emit({ ...r, recorded: rec })
+      console.log(`C: red line -- what is sitting in user-writable space  (${r.ms} ms)`)
+      console.log('')
+      console.log('  ' + (r.truncated ? C.yellow(r.detail) : r.detail))
+      console.log('')
+      for (const [k, v] of Object.entries(r.areas)) {
+        console.log(`  ${String(k).padEnd(18)} ${String((v.bytes / 1048576).toFixed(1)).padStart(9)} MB  ${String(v.files).padStart(7)} files`)
+      }
+      console.log('')
+      console.log(`  flagged ${r.flagged.length} item(s) whose name says cache / download / temp:`)
+      for (const f of r.flagged) {
+        console.log(`    ${String((f.size / 1048576).toFixed(1)).padStart(8)} MB  ${String(f.path).slice(0, 96)}`)
+      }
+      console.log('')
+      console.log(C.dim('  this measures and names; it does not block. Blocking a write needs a filter driver.'))
+      if (rec) console.log(C.dim(`  recorded ${rec.written} new finding(s) -> ${rec.file}`))
       break
     }
 
