@@ -16,6 +16,7 @@ import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
+const NL_SHIM = String.fromCharCode(10)
 const here = dirname(fileURLToPath(import.meta.url))
 const projectDir = resolve(here, '..')
 const cli = join(projectDir, 'bin', 'cli.mjs')
@@ -163,6 +164,82 @@ section('cli detained')
      parsed && Array.isArray(parsed.frozen) && Array.isArray(parsed.rows))
   const rnp = spawnSync(process.execPath, [cli, 'detained', '--no-probe'], { encoding: 'utf8' })
   ok('detained --no-probe exits 0', rnp.status === 0, `status=${rnp.status}`)
+}
+
+// --- custody alerts: does a forgotten freeze ever speak up? ------------------ //
+// A suspension is persistent, so a freeze nobody came back for stays frozen forever. The
+// `detained` command answers the question only if somebody thinks to ask, and the failure mode
+// is exactly that nobody thinks to. This checks the alerting path fires, stays quiet when it
+// should, and resumes nothing.
+
+section('custody alerts')
+{
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const g2 = await import('../lib/core.mjs')
+
+  const dir = mkdtempSync(join(tmpdir(), 'vsep-alert-'))
+  const activity = join(dir, 'activity')
+  mkdirSync(activity, { recursive: true })
+  const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
+  const threeHoursAgo = new Date(Date.now() - 3 * 3600 * 1000).toISOString()
+  writeFileSync(join(activity, day), JSON.stringify({
+    t: threeHoursAgo, kind: 'detain', action: 'suspended', pid: 4242, name: 'cmd.exe',
+    created: threeHoursAgo,
+  }) + NL_SHIM, 'utf8')
+
+  const ctx2 = { logDir: dir }
+  // A stub probe, so the alerting logic is tested without freezing anything real. The default
+  // probe measures real thread states; this asserts the decision that follows from them.
+  const frozen = async (pids) => Object.fromEntries(pids.map((p) => [p,
+    { pid: p, exists: true, name: 'cmd.exe', threads: 4, suspended: 4, frozen: true, created: threeHoursAgo }]))
+  const running = async (pids) => Object.fromEntries(pids.map((p) => [p,
+    { pid: p, exists: true, name: 'cmd.exe', threads: 4, suspended: 0, frozen: false, created: threeHoursAgo }]))
+  const gone = async (pids) => Object.fromEntries(pids.map((p) => [p, { pid: p, exists: false }]))
+
+  const stale = await g2.staleCustody(ctx2, { staleMs: 3600000, probeFn: frozen })
+  ok('a long-frozen process is reported as stale', stale.stale.length === 1, JSON.stringify(stale.stale))
+  ok('the frozen duration is derived from the event', stale.stale[0]?.frozenForMs >= 3 * 3600 * 1000)
+
+  const fresh = await g2.staleCustody(ctx2, { staleMs: 6 * 3600 * 1000, probeFn: frozen })
+  ok('below the threshold nothing is stale', fresh.stale.length === 0)
+
+  const releasedAlready = await g2.staleCustody(ctx2, { staleMs: 3600000, probeFn: running })
+  ok('a process that is running is not stale', releasedAlready.stale.length === 0)
+
+  const exitedAlready = await g2.staleCustody(ctx2, { staleMs: 3600000, probeFn: gone })
+  ok('a process that exited is history, not an alert', exitedAlready.stale.length === 0)
+
+  const first = await g2.reconcileCustody(ctx2, { staleMs: 3600000, probeFn: frozen })
+  ok('the alert fires', first.alerted === true, JSON.stringify(first))
+  ok('it names the pid and the duration', /4242/.test(first.detail) && /frozen/.test(first.detail),
+     first.detail)
+  ok('it does not claim to have resumed anything',
+     first.stale.every((r) => r.state !== 'resumed'), JSON.stringify(first.stale.map((r) => r.state)))
+
+  const second = await g2.reconcileCustody(ctx2, { staleMs: 3600000, probeFn: frozen })
+  ok('it is throttled to once an hour', second.alerted === false, JSON.stringify(second))
+  ok('and it says why it stayed quiet', /already alerted/.test(second.why ?? ''), second.why)
+
+  const lines = readFileSync(join(activity, day), 'utf8').trim().split(NL_SHIM)
+  const last = JSON.parse(lines[lines.length - 1])
+  ok('the alert is written to the record', last.kind === 'custody-alert', JSON.stringify(last))
+  ok('the record says nothing was resumed automatically', /nothing was resumed/.test(last.hint ?? ''),
+     last.hint)
+  ok('the alert tells the reader what to run', /detained/.test(last.hint ?? ''))
+
+  const quiet = await g2.reconcileCustody(ctx2, { staleMs: 3600000, probeFn: running })
+  ok('nothing stale means no alert', quiet.alerted === false)
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
+section('cli heal --custody')
+{
+  const r = spawnSync(process.execPath, [cli, 'heal', '--custody', '--quiet'], { encoding: 'utf8' })
+  ok('heal --custody exits 0', r.status === 0, `status=${r.status} ${r.stderr?.slice(0, 120)}`)
+  const rHelp = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' })
+  ok('--help mentions the custody reconcile', /custody/.test(rHelp.stdout))
 }
 
 // A port nothing should be listening on.

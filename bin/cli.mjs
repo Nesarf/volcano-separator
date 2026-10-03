@@ -42,6 +42,7 @@ function parseArgs(argv) {
     else if (a === '--no-topmost') opts['no-topmost'] = true
     else if (a === '--signals') opts.signals = true
     else if (a === '--redline') opts.redline = true
+    else if (a === '--custody') opts.custody = true
     else if (a === '--record') opts.record = true
     else if (a === '--show') opts.show = true
     else if (a === '--all') opts.all = true
@@ -84,6 +85,8 @@ Commands:
   activity [n]       the system-wide process/window/persistence record (default last 40)
   busy [minutes]     what has actually been running, grouped (runs, location, allowlist)
   redline [seconds]  what is sitting on C: in user-writable space (--record keeps findings)
+  (heal --custody     also reconcile custody: a suspension is persistent, so a freeze nobody
+                      came back for stays frozen; the alert names the release command)
   signals [minutes]  what looks like stealth, with evidence (observe-only)
   decide [minutes]   what would be done about each signal -- still acts on nothing (--record keeps open questions)
   reveal windows [--show] [--all] [--filter re]   every top-level window; --show forces hidden ones visible
@@ -230,6 +233,23 @@ async function main() {
         }
       }
 
+      // Custody reconciliation. A suspension is persistent, so a freeze nobody came back for
+      // stays frozen forever and the only moment it gets noticed is when somebody thinks to ask.
+      // This is the asking. It resumes nothing: releasing a process a person deliberately froze is
+      // their decision, so the alert names the command instead of running it.
+      let cus = null
+      if (opts.custody) {
+        try {
+          const rec = await g.reconcileCustody(ctx)
+          cus = rec.alerted
+            ? { alerted: true, count: rec.stale.length, detail: rec.detail }
+            : { alerted: false, stale: rec.stale.length, why: rec.why }
+        } catch (e) {
+          // A custody failure must never make the service heartbeat look broken.
+          cus = { error: String(e?.message ?? e) }
+        }
+      }
+
       const verdict = r.skipped
         ? `skipped(${r.reason})`
         : r.deferred
@@ -248,6 +268,7 @@ async function main() {
             `uv=${ctx.uvx ? 'y' : 'n'} profile=${ctx.profile} ` +
             `${r.steps?.length ? '| ' + r.steps.map((st) => st.step).join('>') : ''}` +
             `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh) : ''}` +
+            `${cus ? (cus.error ? ' | custody=ERROR' : (cus.alerted ? ' | custody=ALERT(' + cus.count + ')' : ' | custody=clear')) : ''}` +
             `${rl ? ' | cdisk=' + (rl.error ? 'ERROR' : rl.gb + 'GB/flagged:' + rl.flagged + '/new:' + rl.fresh) : ''}` +
             '\n',
         )
