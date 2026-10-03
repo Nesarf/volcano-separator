@@ -66,6 +66,8 @@ Commands:
   reveal process <pid>                            everything observable about a live process
   reveal chain <pid>                              inherited chain, recovered from history
   policy [show|allow <e>|deny <e>|mode <m>]        what stealth is permitted, and what happens to the rest
+  detain <pid> [--reason "..."] [--no-suspend]     freeze it, force its windows open, open a custody window
+  release <pid>                                   resume a detained process
   ps                 what is running right now, with ages (spots a wedged process)
   logs [n]           the last n uv transcripts, plus the heartbeat trail
   doctor             count historical start failures from the plugin log
@@ -195,13 +197,14 @@ async function main() {
     }
 
     case 'ps': {
-      const [procs, db, daemon, svc] = await Promise.all([
+      const [procs, db, daemon, svc, rec] = await Promise.all([
         g.liveProcesses(ctx),
         g.probePostgres(ctx),
         g.probeDaemon(ctx),
         g.serviceState(ctx),
+        g.probeActivityRecorder(ctx),
       ])
-      if (opts.json) return emit({ procs, db, daemon, svc })
+      if (opts.json) return emit({ procs, db, daemon, svc, recorder: rec })
       console.log('what is running right now')
       console.log('')
       console.log(`  database   ${db.ok ? C.green('up  ') : C.red('DOWN')}  ${db.detail}`)
@@ -213,7 +216,9 @@ async function main() {
       for (const p of procs) {
         const age = p.ageSeconds
         // Age is the signal: a uvx alive for minutes is either working or wedged.
-        const flag = age > 240 ? C.red('STUCK?') : age > 60 ? C.yellow('busy  ') : '      '
+        // Long-lived servers are long-lived; only launchers can be "stuck".
+        const isServer = /postgres|hindsight-api/i.test(p.name)
+        const flag = isServer ? '      ' : age > 240 ? C.red('STUCK?') : age > 60 ? C.yellow('busy  ') : '      '
         console.log(`  ${flag} ${String(p.name).padEnd(17)} pid=${String(p.pid).padEnd(7)} ${String(age + 's').padStart(8)}  ${C.dim(p.cmd)}`)
       }
       console.log('')
@@ -378,6 +383,34 @@ async function main() {
         console.log(`     ${String(e.t).replace('T', ' ').slice(0, 19)}  ${String(e.action ?? 'observed').padEnd(9)} ${e.name} pid=${e.pid} ${C.dim(String(e.why ?? '').slice(0, 70))}`)
       }
       break
+    }
+
+    case 'detain': {
+      const pid = Number(opts._[1] ?? opts.pid ?? 0)
+      const r = await g.detain(ctx, {
+        pid,
+        suspend: opts['no-suspend'] !== true,
+        custody: opts['no-custody'] !== true,
+        topmost: opts['no-topmost'] !== true,
+        reason: opts.reason ?? '',
+      })
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red('FAIL') + ' detain: ' + r.detail); process.exit(1) }
+      console.log(`${C.green('ok')} detained ${r.name} (pid ${r.pid})`)
+      console.log(`  frozen          ${r.suspended ? C.green('yes') + ' -- it cannot close, hide or change anything' : C.yellow('no') + ' -- only observed'}`)
+      console.log(`  windows found   ${r.windows} (forced visible: ${r.forcedVisible})`)
+      console.log(`  custody window  ${r.custody ? 'open -- it belongs to us, the target cannot close it' : 'not opened'}`)
+      console.log('')
+      console.log(C.dim('  the window offers ALLOW (records your decision) or RELEASE (just resumes it)'))
+      break
+    }
+
+    case 'release': {
+      const pid = Number(opts._[1] ?? opts.pid ?? 0)
+      const r = await g.detain(ctx, { pid, release: true })
+      if (opts.json) return emit(r)
+      console.log(`${r.ok ? C.green('ok') : C.red('FAIL')} release: ${r.ok ? `resumed pid ${r.pid}` : r.detail}`)
+      process.exit(r.ok ? 0 : 1)
     }
 
     case 'doctor': {
