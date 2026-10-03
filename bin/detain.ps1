@@ -150,6 +150,11 @@ $summary = [pscustomobject]@{
     custody = (-not $NoCustody)
 }
 
+# Write the record FIRST. The custody window needs WinForms, and anything that fails there
+# would otherwise take the summary down with it -- which is exactly how "detain produced no
+# summary" happened while the freeze itself had worked perfectly.
+try { $summary | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $ActivityDir ("detain-$TargetPid.json")) -Encoding UTF8 } catch { }
+
 # ------------------------------------------------------------------ 3. custody window
 if (-not $NoCustody) {
     Add-Type -AssemblyName System.Windows.Forms

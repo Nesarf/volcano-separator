@@ -33,11 +33,24 @@ function parseArgs(argv) {
     else if (a === '--dry-run') opts.dryRun = true
     else if (a === '--require-dsh') opts['require-dsh'] = true
     else if (a === '--no-activity') opts['no-activity'] = true
+    else if (a === '--no-custody') opts['no-custody'] = true
+    else if (a === '--no-suspend') opts['no-suspend'] = true
+    else if (a === '--no-topmost') opts['no-topmost'] = true
+    else if (a === '--show') opts.show = true
+    else if (a === '--all') opts.all = true
+    else if (a === '--stops') opts.stops = true
     else if (a === '--help' || a === '-h') opts.help = true
     else if (a.startsWith('--')) {
       const key = a.slice(2)
-      const val = argv[++i]
-      opts[key] = val
+      const next = argv[i + 1]
+      // A bare switch must not swallow the following argument: `detain 123 --no-custody`
+      // previously consumed nothing and silently left custody ON, so the flag did the
+      // opposite of what it said.
+      if (next === undefined || next.startsWith('-')) {
+        opts[key] = true
+      } else {
+        opts[key] = argv[++i]
+      }
     } else opts._.push(a)
   }
   return opts
