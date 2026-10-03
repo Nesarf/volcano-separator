@@ -299,7 +299,12 @@ async function main() {
       console.log(C.dim(`  ${r.total} events in the window shown${r.kind || opts.kind ? '' : ''}`))
       console.log('')
       if (r.events.length === 0) {
-        console.log(C.dim('  (nothing recorded -- is the recorder installed? run: volcano-separator install-service)'))
+        const why = !r.recorderRunning
+          ? 'nothing recorded and no record file -- the recorder is not installed (run: volcano-separator install-service)'
+          : !r.readable
+            ? `the recorder is running but ${r.readFailures} file(s) could not be read -- most likely another instance is holding them`
+            : 'the record file is there but empty for this window'
+        console.log(C.yellow('  ' + why))
       }
       for (const e of r.events) {
         const when = String(e.t ?? '').replace('T', ' ').slice(0, 19)

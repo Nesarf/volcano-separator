@@ -25,6 +25,39 @@ param(
 $ErrorActionPreference = 'Continue'
 $script:SelfPid = $PID
 
+# Only one recorder may exist. Two of them do not merely duplicate rows: each can hold the
+# day's file open, and a reader then gets EBUSY and is told there is no record at all -- which
+# is exactly the invisible state this tool exists to remove. The task can fire again while an
+# older instance is still alive (startup and logon triggers, plus restart-on-failure), so the
+# guard has to live in the script and not in the scheduler.
+# A named mutex would be tidier but does not survive the session boundary here: the recorder runs
+# as SYSTEM, and a process in the interactive session can be refused access to a Global object
+# it created. A lock file created with FileMode.CreateNew has no such problem, and CreateNew is
+# atomic -- two instances racing cannot both win it.
+$lockPath = Join-Path $LogDir 'recorder.lock'
+$script:InstanceLock = $null
+try {
+    $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $owner = [System.Text.Encoding]::UTF8.GetBytes(([string]$PID))
+    $script:InstanceLock.Write($owner, 0, $owner.Length)
+    $script:InstanceLock.Flush()
+} catch {
+    # Somebody else holds it -- unless they are gone, in which case the lock is stale.
+    $stale = $false
+    try {
+        $held = [int]((Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop).Trim())
+        if (-not (Get-Process -Id $held -ErrorAction SilentlyContinue)) { $stale = $true }
+    } catch { $stale = $true }
+    if ($stale) {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+        try {
+            $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        } catch { exit 0 }
+    } else {
+        exit 0
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Write-Event {
@@ -38,7 +71,17 @@ function Write-Event {
                  '"{0}":{1}' -f $_.Key, $(if ($_.Value -is [int] -or $_.Value -is [long]) { $_.Value } else { '"' + $v + '"' })
              }) -join ','
     $file = Join-Path $LogDir (('activity-' + (Get-Date).ToString('yyyy-MM-dd')) + '.ndjson')
-    try { Add-Content -LiteralPath $file -Value ('{' + $line + '}') -Encoding UTF8 } catch { }
+    # Open, write, close -- and allow readers in while we do it. Add-Content can end up holding
+    # an exclusive handle, and a record nobody can read is not a record: the reader gets EBUSY,
+    # concludes there is no recorder, and the tool reproduces the invisibility it exists to fix.
+    try {
+        $fs = [System.IO.File]::Open($file, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes(('{' + $line + '}') + [char]10)
+            $fs.Write($bytes, 0, $bytes.Length)
+            $fs.Flush()
+        } finally { $fs.Dispose() }
+    } catch { }
 }
 
 function Prune-Old {

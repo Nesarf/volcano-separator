@@ -12,6 +12,8 @@
 
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
+import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -190,6 +192,44 @@ ok('doctor --json emits valid JSON', parsed !== null && typeof parsed.verdict ==
 
 const bogus = runCli(['definitely-not-a-command'])
 ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
+
+// ── activity record: write one, read it back ─
+// This is the regression test for a real defect. Two recorder instances ran at once, one held
+// the day's file open, and readers got EBUSY -- so readActivity returned "0 events, no recorder"
+// while the recorder was alive and its file was 2.2 MB. A transparency tool that cannot read its
+// own output has reproduced the problem it was built to remove.
+{
+  const dir = join(tmpdir(), 'volcano-separator-smoke-' + process.pid)
+  rmSync(dir, { recursive: true, force: true })
+  const act = join(dir, 'activity')
+  mkdirSync(act, { recursive: true })
+  const file = join(act, 'activity-2026-01-01.ndjson')
+  const rows = [
+    { t: '2026-01-01T00:00:01Z', kind: 'proc-start', pid: 1, ppid: 0, name: 'a.exe', cmd: 'a.exe' },
+    { t: '2026-01-01T00:00:02Z', kind: 'window', pid: 1, name: 'a.exe', title: 'hello' },
+    { t: '2026-01-01T00:00:03Z', kind: 'persist', surface: 'RunKeys', action: 'added', name: 'x', value: 'y' },
+  ]
+  writeFileSync(file, rows.map((r) => JSON.stringify(r)).join(String.fromCharCode(10)) + String.fromCharCode(10))
+
+  const ctx = { logDir: dir, profile: 'smoke' }
+  const back = g.readActivity(ctx, { limit: 10 })
+  ok('activity record round-trips', back.total === 3, `read ${back.total} of 3`)
+  ok('a readable record is reported readable', back.readable === true, `readable=${back.readable}`)
+  ok('no read failures on a readable record', back.readFailures === 0, `failures=${back.readFailures}`)
+
+  // Now the part that would have caught the bug: hold the file with a writer that denies
+  // sharing. The reader must say so, and must NOT claim there is no recorder.
+  const fd = openSync(file, 'a')
+  let lockedRead = null
+  try {
+    lockedRead = g.readActivity(ctx, { limit: 10 })
+  } finally {
+    closeSync(fd)
+  }
+  ok('a locked record is still reported as a running recorder', lockedRead.recorderRunning === true, `recorderRunning=${lockedRead.recorderRunning}`)
+
+  rmSync(dir, { recursive: true, force: true })
+}
 
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
