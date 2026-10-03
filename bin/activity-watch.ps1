@@ -25,40 +25,41 @@ param(
 $ErrorActionPreference = 'Continue'
 $script:SelfPid = $PID
 
-# Only one recorder may exist. Two of them do not merely duplicate rows: each can hold the
-# day's file open, and a reader then gets EBUSY and is told there is no record at all -- which
-# is exactly the invisible state this tool exists to remove. The task can fire again while an
-# older instance is still alive (startup and logon triggers, plus restart-on-failure), so the
-# guard has to live in the script and not in the scheduler.
-# A named mutex would be tidier but does not survive the session boundary here: the recorder runs
-# as SYSTEM, and a process in the interactive session can be refused access to a Global object
-# it created. A lock file created with FileMode.CreateNew has no such problem, and CreateNew is
-# atomic -- two instances racing cannot both win it.
+# The directory must exist before anything tries to create a file in it. Getting this order wrong
+# is what silently disabled this recorder: the guard ran first, failed to open its lock file because
+# the directory was missing, and treated that as 'another instance holds it' -- so the script exited 0
+# and wrote nothing, and nothing anywhere said so.
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+# Only one recorder may exist. Two of them do not merely duplicate rows: each can hold the day's
+# file open, and a reader then gets EBUSY and is told there is no record at all -- the invisible
+# state this tool exists to remove.
+#
+# The guard fails OPEN. It stops a second instance, and it never stops the first: a lock that cannot
+# be created for any reason other than 'somebody holds it' must not be allowed to switch the recorder
+# off, because a safeguard that silently disables the thing it guards is worse than no safeguard.
 $lockPath = Join-Path $LogDir 'recorder.lock'
 $script:InstanceLock = $null
+$script:LockNote = ''
 try {
     $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
     $owner = [System.Text.Encoding]::UTF8.GetBytes(([string]$PID))
     $script:InstanceLock.Write($owner, 0, $owner.Length)
     $script:InstanceLock.Flush()
 } catch {
-    # Somebody else holds it -- unless they are gone, in which case the lock is stale.
-    $stale = $false
-    try {
-        $held = [int]((Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop).Trim())
-        if (-not (Get-Process -Id $held -ErrorAction SilentlyContinue)) { $stale = $true }
-    } catch { $stale = $true }
-    if ($stale) {
-        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
-        try {
-            $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-        } catch { exit 0 }
-    } else {
+    $holder = $null
+    try { $holder = [int]((Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop).Trim()) } catch { }
+    if ($holder -and (Get-Process -Id $holder -ErrorAction SilentlyContinue)) {
+        # Genuinely another live recorder. Stand down.
         exit 0
     }
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    try {
+        $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    } catch {
+        $script:LockNote = 'single-instance guard unavailable: ' + $_.Exception.Message
+    }
 }
-
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Write-Event {
     param([hashtable]$Fields)
