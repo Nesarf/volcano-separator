@@ -72,7 +72,12 @@ ok('the summary mentions protected processes', /protected in top/.test(res.summa
 section('cli resources')
 const rOk = spawnSync(process.execPath, [cli, 'resources'], { encoding: 'utf8' })
 ok('resources exits 0 or 3', rOk.status === 0 || rOk.status === 3, `status=${rOk.status}`)
-ok('resources reports free memory', /GB free of/.test(rOk.stdout))
+// Two correct outcomes: a reading, or a clean statement that the probe is unavailable. The
+// probe needs PowerShell, which ubuntu-latest does not have, and degrading to "unavailable"
+// rather than guessing is the behaviour worth asserting.
+ok('resources reports free memory or says it is unavailable',
+   /GB free of/.test(rOk.stdout) || /unavailable/i.test(rOk.stdout),
+   rOk.stdout.slice(0, 120))
 const rJson = spawnSync(process.execPath, [cli, '--json', 'resources'], { encoding: 'utf8' })
 let resJson = null
 try {
@@ -142,8 +147,10 @@ section('cli detained')
 {
   const r = spawnSync(process.execPath, [cli, 'detained'], { encoding: 'utf8' })
   ok('detained exits 0', r.status === 0, `status=${r.status}`)
-  ok('detained reports either frozen or nothing frozen',
-     /still frozen|nothing is frozen/.test(r.stdout), r.stdout.slice(0, 160))
+  // Three correct outcomes, and "there is no record yet" is one of them: a machine where no
+  // custody action has ever been taken has nothing to report, and saying so is not a failure.
+  ok('detained reports frozen, nothing frozen, or no record',
+     /still frozen|nothing is frozen|no custody record/.test(r.stdout), r.stdout.slice(0, 160))
   const rj = spawnSync(process.execPath, [cli, '--json', 'detained'], { encoding: 'utf8' })
   let parsed = null
   try {
