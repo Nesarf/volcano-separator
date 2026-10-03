@@ -36,6 +36,8 @@ function parseArgs(argv) {
     else if (a === '--no-custody') opts['no-custody'] = true
     else if (a === '--no-suspend') opts['no-suspend'] = true
     else if (a === '--no-topmost') opts['no-topmost'] = true
+    else if (a === '--signals') opts.signals = true
+    else if (a === '--record') opts.record = true
     else if (a === '--show') opts.show = true
     else if (a === '--all') opts.all = true
     else if (a === '--stops') opts.stops = true
@@ -182,6 +184,20 @@ async function main() {
       // Always leave a trace, even in heartbeat mode. A task that starts, does something and
       // closes without writing a single byte is indistinguishable from one that crashed -- and
       // "I cannot tell what it did" is its own failure mode.
+      // The heartbeat's second job: look at what happened since the last tick and record
+      // anything that needs a human. Observe-only, bounded to a window wider than the interval,
+      // and silent -- a five-minute task that prints is a five-minute nuisance.
+      let sig = null
+      if (opts.signals) {
+        try {
+          const d = g.decideSignals(ctx, { sinceMinutes: 6 })
+          const rec = g.recordDecisions(ctx, d.decisions)
+          sig = { total: d.total, ask: d.byVerdict.ask, fresh: rec.written }
+        } catch (e) {
+          // A signal-layer failure must never make the service heartbeat look broken.
+          sig = { error: String(e?.message ?? e) }
+        }
+      }
       const verdict = r.skipped
         ? `skipped(${r.reason})`
         : r.ok
@@ -196,7 +212,9 @@ async function main() {
           join(ctx.logDir, 'heartbeat.log'),
           `${new Date().toISOString()}  ${verdict.padEnd(18)} ${String(Date.now() - t0).padStart(6)}ms  ` +
             `uv=${ctx.uvx ? 'y' : 'n'} profile=${ctx.profile} ` +
-            `${r.steps?.length ? '| ' + r.steps.map((s) => s.step).join('>') : ''}\n`,
+            `${r.steps?.length ? '| ' + r.steps.map((st) => st.step).join('>') : ''}` +
+            `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh) : ''}` +
+            '\n',
         )
       } catch {
         /* logging must never break the run */
