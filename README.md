@@ -151,3 +151,7 @@ and Windows.
 ## License
 
 MIT
+
+## Resource layer
+
+`resources` reports headroom; `defer` turns it into an exit code (0 = go, 3 = not now).

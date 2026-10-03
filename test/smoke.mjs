@@ -35,6 +35,54 @@ function section(title) {
   console.log(`\n${title}`)
 }
 
+// --- resource layer ------------------------------------------------------- //
+// The decision function is pure, so it can be checked against fixed inputs instead of
+// against whatever this machine happens to be doing.
+const res = await import('../lib/resources.mjs')
+
+section('resources')
+ok('probeResources exists', typeof res.probeResources === 'function')
+ok('decideDefer exists', typeof res.decideDefer === 'function')
+ok('waitForHeadroom exists', typeof res.waitForHeadroom === 'function')
+
+const lowMem = { ok: true, totalGB: 16, freeGB: 0.4, cpu: 3, top: [] }
+ok('defers when memory is tight', res.decideDefer(lowMem).defer === true)
+ok('says why it deferred', /below the floor/.test(res.decideDefer(lowMem).reason))
+
+const busyCpu = { ok: true, totalGB: 16, freeGB: 12, cpu: 97, top: [] }
+ok('defers when the CPU is saturated', res.decideDefer(busyCpu).defer === true)
+
+const fine = { ok: true, totalGB: 16, freeGB: 9, cpu: 12, top: [] }
+ok('allows work when there is headroom', res.decideDefer(fine).defer === false)
+ok('honours a caller-supplied floor', res.decideDefer(fine, { free: 12 }).defer === true)
+
+const unknown = { ok: false, error: 'probe failed', totalGB: null, freeGB: null, cpu: null, top: [] }
+ok('an unknown state defers rather than guessing', res.decideDefer(unknown).defer === true)
+
+const withDaemon = {
+  ok: true, totalGB: 16, freeGB: 9, cpu: 10,
+  top: [{ pid: 1, name: 'python.exe', mb: 1200, cmd: 'python -m hindsight_api.server --port 9077' }],
+}
+ok('recognises the daemon by its command line', res.protectedAmong(withDaemon).length === 1)
+ok('the daemon is reported as protected', /memory daemon/.test(res.protectedAmong(withDaemon)[0].why))
+ok('the summary mentions protected processes', /protected in top/.test(res.summarizeResources(withDaemon)))
+
+section('cli resources')
+const rOk = spawnSync(process.execPath, [cli, 'resources'], { encoding: 'utf8' })
+ok('resources exits 0 or 3', rOk.status === 0 || rOk.status === 3, `status=${rOk.status}`)
+ok('resources reports free memory', /GB free of/.test(rOk.stdout))
+const rJson = spawnSync(process.execPath, [cli, '--json', 'resources'], { encoding: 'utf8' })
+let resJson = null
+try {
+  resJson = JSON.parse(rJson.stdout)
+} catch {
+  /* handled below */
+}
+ok('resources --json emits valid JSON', resJson !== null)
+ok('resources --json has a decision', resJson && typeof resJson.decision?.defer === 'boolean')
+const dNoWait = spawnSync(process.execPath, [cli, 'defer'], { encoding: 'utf8' })
+ok('defer exits 0 or 3', dNoWait.status === 0 || dNoWait.status === 3, `status=${dNoWait.status}`)
+
 // A port nothing should be listening on.
 const DEAD_PORT = 59987
 

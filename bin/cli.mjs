@@ -9,6 +9,9 @@
  *   volcano-separator stop|restart
  *   volcano-separator doctor            count historical start failures from the plugin log
  *   volcano-separator guard <op>        check whether a uv cache operation is safe (clean / prune)
+ *   volcano-separator resources         headroom check: free memory, CPU, largest processes
+ *   volcano-separator defer [--wait]    exit 0 when heavy work is safe to start, 3 when it is not
+ *                                       --wait blocks until there is headroom (or --max-wait)
  *   volcano-separator install-service   register the watchdog task (at logon + every N minutes)
  *   volcano-separator uninstall-service
  *   volcano-separator service           show the watchdog task state
@@ -19,6 +22,7 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import * as g from '../lib/core.mjs'
+import * as res from '../lib/resources.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -513,6 +517,47 @@ async function main() {
       console.log(C.dim('  watchdog allowed only ~180 s. Staging (warm with no watchdog -> serve in'))
       console.log(C.dim('  seconds -> watch heartbeat) is what targets exactly that.'))
       break
+    }
+
+    case 'resources': {
+      const probe = await res.probeResources({ top: Number(opts._[1]) || 6 })
+      const decision = res.decideDefer(probe, {
+        free: opts.free ? Number(opts.free) : undefined,
+        cpu: opts.cpu ? Number(opts.cpu) : undefined,
+      })
+      const report = [res.summarizeResources(probe, decision)]
+      for (const p of probe.top ?? []) {
+        report.push(`    ${String(p.mb).padStart(5)} MB  ${p.name}  #${p.pid}`)
+      }
+      if (decision.held?.length) {
+        report.push(`  protected: ${decision.held.map((h) => `${h.name} #${h.pid} (${h.why})`).join(', ')}`)
+      }
+      emit({ ...probe, decision }, report.join(String.fromCharCode(10)))
+      // 0 = room for heavy work; 3 = defer. Three is deliberate: 'not now' is not a failure.
+      process.exit(decision.defer ? 3 : 0)
+    }
+
+    case 'defer': {
+      const want = {
+        free: opts.free ? Number(opts.free) : undefined,
+        cpu: opts.cpu ? Number(opts.cpu) : undefined,
+      }
+      let decision
+      if (opts.wait) {
+        decision = await res.waitForHeadroom({
+          ...want,
+          maxWaitMs: opts['max-wait'] ? Number(opts['max-wait']) * 1000 : undefined,
+          log: (m) => {
+            if (!opts.quiet) {
+              console.error(`  ${C.yellow('waiting')}: ${m.replace(/^waiting: /, '')}`)
+            }
+          },
+        })
+      } else {
+        decision = res.decideDefer(await res.probeResources({ top: 4 }), want)
+      }
+      emit(decision, decision.defer ? C.yellow(`defer: ${decision.reason}`) : C.green(`go: ${decision.reason}`))
+      process.exit(decision.defer ? 3 : 0)
     }
 
     case 'guard': {

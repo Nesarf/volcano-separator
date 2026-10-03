@@ -1,3 +1,19 @@
+## Unreleased
+
+### Added
+- **Resource layer** (`lib/resources.mjs`, `lib/core.mjs:probeResources`). The uv / daemon /
+  hindsight layers kept the service reachable but said nothing about whether the machine could
+  afford an unrelated heavy job. A batch decompiler peaking at ~1.8 GB ran against a daemon
+  holding ~1.25 GB and the daemon was killed -- twice.
+  - `probeResources` reports free memory, CPU load and the largest processes with their command
+    lines, so the embedded services (which run as a generic interpreter image) can be recognised.
+  - `decideDefer` and `waitForHeadroom` turn that into a go / defer verdict with explicit floors.
+  - CLI: `resources [n]` and `defer [--wait]` (exit 0 = go, 3 = not now).
+  - `heal` now measures headroom before starting the service and, if the service comes up and
+    then dies, records how much memory was left and who held it -- separating "broken" from
+    "there was no room".
+- 17 new smoke checks (67 total).
+
 # Changelog
 
 ## 1.0.1 — 2026-09-30
