@@ -28,7 +28,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$ActivityDir = 'E:\DaShaoHuo\cache\tmp\volcano-separator\activity'
+if (-not $ActivityDir) { $ActivityDir = Join-Path $env:TEMP (Join-Path 'volcano-separator' 'activity') }
 New-Item -ItemType Directory -Force -Path $ActivityDir | Out-Null
 
 function Write-Activity {

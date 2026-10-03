@@ -1,14 +1,17 @@
-# 生成物：由 `volcano-separator install-service` 按本机路径写出
+# Generated: written by `volcano-separator install-service` using local paths
 bin/guard-task.cmd
 
-# 依赖（本项目零第三方依赖，留个口子以防以后引入）
+# Dependencies (this project has none; the entries are here in case that changes)
 node_modules/
 pnpm-lock.yaml
 package-lock.json
 yarn.lock
 
-# 运行时产物
+# Runtime artifacts
 *.log
 *.tmp
 .DS_Store
 Thumbs.db
+
+# Local test samples -- never committed
+samples/

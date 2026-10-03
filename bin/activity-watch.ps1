@@ -16,7 +16,7 @@
 #   * It writes plain newline-delimited JSON lines, one per event, so the record is readable
 #     even when every other part of the stack is down.
 param(
-    [string]$LogDir = 'E:\DaShaoHuo\cache\tmp\volcano-separator\activity',
+    [string]$LogDir = (Join-Path $env:TEMP (Join-Path 'volcano-separator' 'activity')),
     [int]$KeepDays = 7,
     [int]$PersistIntervalSec = 60,
     [int]$TasksEveryNthPass = 10
