@@ -81,6 +81,7 @@ Commands:
   serve              start the service only (seconds once the env is hot)
   stop | restart
   activity [n]       the system-wide process/window/persistence record (default last 40)
+  busy [minutes]     what has actually been running, grouped (runs, location, allowlist)
   signals [minutes]  what looks like stealth, with evidence (observe-only)
   decide [minutes]   what would be done about each signal -- still acts on nothing (--record keeps open questions)
   reveal windows [--show] [--all] [--filter re]   every top-level window; --show forces hidden ones visible
@@ -501,6 +502,27 @@ async function main() {
       if (rec) console.log(C.dim(`
   recorded ${rec.written} open question(s) -> ${rec.file}`))
       else if (r.byVerdict.ask) { console.log(''); console.log(C.dim('  add --record to keep these questions in the activity record')) }
+      break
+    }
+
+    case 'busy': {
+      const mins = Number(opts._[1] ?? 120)
+      const r = g.summarizeActivity(ctx, { sinceMinutes: Number.isFinite(mins) ? mins : 120, limit: opts.all ? 500 : 25 })
+      if (opts.json) return emit(r)
+      console.log(`what has been running -- last ${r.window}  (${r.observed} events, ${r.distinctPrograms} distinct programs)`)
+      console.log('')
+      console.log(C.dim('  runs  program                    location'))
+      for (const x of r.rows) {
+        const runs = String(x.runs).padStart(5)
+        const name = String(x.name).padEnd(24).slice(0, 24)
+        // A program outside the allowlist that runs hundreds of times is the interesting row.
+        const mark = x.allowed ? C.dim('allowed') : C.yellow('not allowlisted')
+        const where = x.exe ? C.dim(String(x.exe).slice(0, 58)) : C.dim('(command line not captured)')
+        console.log(`  ${runs}  ${name}  ${mark}`)
+        console.log(`         ${where}`)
+      }
+      console.log('')
+      console.log(C.dim('  recording is not transparency -- this is the view that answers "what ran here"'))
       break
     }
 
