@@ -41,24 +41,48 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $lockPath = Join-Path $LogDir 'recorder.lock'
 $script:InstanceLock = $null
 $script:LockNote = ''
+
+# Reading the lock must not be fooled by an empty one. [int]('') throws, and treating that as
+# 'stale' would delete a live holder's lock and let a second recorder in -- a guard that quietly
+# stops guarding. Emptiness is therefore judged by age: recent and unreadable means held, old and
+# unreadable means the holder died before it could write.
+# Is the lock held? Ask the filesystem, not the file's contents.
+#
+# The first version wrote the holder's pid and read it back. That failed in two ways at once: the
+# pid never reached disk (the file stayed 0 bytes), and reading an empty file threw, which the
+# caller took for 'stale'. An age heuristic was no better -- a lock that is genuinely held open
+# looks exactly like an abandoned one. Trying to open it exclusively answers the real question
+# directly, and needs no pid and no clock.
+function Test-LockHeld {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $probe = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $probe.Dispose()
+        return $false   # we could take it exclusively, so nobody else holds it
+    } catch {
+        return $true    # somebody holds it open
+    }
+}
+
+$script:HeldByOther = Test-LockHeld -Path $lockPath
+if ($script:HeldByOther) {
+    exit 0
+}
+
+# Ours to take. Remove whatever was there (stale, or empty) and create it atomically.
+Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
 try {
     $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
     $owner = [System.Text.Encoding]::UTF8.GetBytes(([string]$PID))
     $script:InstanceLock.Write($owner, 0, $owner.Length)
     $script:InstanceLock.Flush()
+    if (-not (Get-Item -LiteralPath $lockPath).Length) {
+        $script:LockNote = 'lock created but the holder pid did not persist'
+    }
 } catch {
-    $holder = $null
-    try { $holder = [int]((Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop).Trim()) } catch { }
-    if ($holder -and (Get-Process -Id $holder -ErrorAction SilentlyContinue)) {
-        # Genuinely another live recorder. Stand down.
-        exit 0
-    }
-    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
-    try {
-        $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    } catch {
-        $script:LockNote = 'single-instance guard unavailable: ' + $_.Exception.Message
-    }
+    # Could not take the lock at all. Fail OPEN: never let a lock failure switch off the recorder.
+    $script:LockNote = 'single-instance guard unavailable: ' + $_.Exception.Message
 }
 
 function Write-Event {
