@@ -75,6 +75,7 @@ Commands:
   serve              start the service only (seconds once the env is hot)
   stop | restart
   activity [n]       the system-wide process/window/persistence record (default last 40)
+  signals [minutes]  what looks like stealth, with evidence (observe-only)
   reveal windows [--show] [--all] [--filter re]   every top-level window; --show forces hidden ones visible
   reveal process <pid>                            everything observable about a live process
   reveal chain <pid>                              inherited chain, recovered from history
@@ -424,6 +425,29 @@ async function main() {
       if (opts.json) return emit(r)
       console.log(`${r.ok ? C.green('ok') : C.red('FAIL')} release: ${r.ok ? `resumed pid ${r.pid}` : r.detail}`)
       process.exit(r.ok ? 0 : 1)
+    }
+
+    case 'signals': {
+      const mins = Number(opts._[1] ?? 60)
+      const r = g.analyzeSignals(ctx, { sinceMinutes: Number.isFinite(mins) ? mins : 60, limit: opts.all ? 500 : 40 })
+      if (opts.json) return emit(r)
+      console.log(`signals over the last ${r.window}  (${r.observed} recorded events examined)`)
+      console.log('')
+      console.log(`  findings   ${r.total}   (${r.allowed} already covered by the allowlist)`)
+      console.log(`  by rule    ${Object.entries(r.byRule).map(([k, v]) => `${k}=${v}`).join('  ') || '(none)'}`)
+      console.log(`  mode       ${r.mode}${r.mode === 'observe' ? C.green('  (this layer only notices)') : C.red('  (enforcement is ON)')}`)
+      console.log('')
+      for (const f of r.findings) {
+        const sev = f.severity === 'high' ? C.red('HIGH') : f.severity === 'medium' ? C.yellow('MED ') : C.dim('low ')
+        const tag = f.allowed ? C.dim('[allowed]') : ''
+        console.log(`  ${sev} ${String(f.rule).padEnd(22)} ${f.subject} ${tag}`)
+        console.log(`       ${C.dim(f.why)}`)
+        if (f.path && f.path !== f.subject) console.log(`       ${C.dim(String(f.path).slice(0, 120))}`)
+      }
+      if (!r.total) console.log(C.dim('  nothing flagged in this window'))
+      console.log('')
+      console.log(C.dim('  observe-only by design: findings are reported, never acted on'))
+      break
     }
 
     case 'doctor': {
