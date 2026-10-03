@@ -150,8 +150,11 @@ section('cli detained')
   ok('detained exits 0', r.status === 0, `status=${r.status}`)
   // Three correct outcomes, and "there is no record yet" is one of them: a machine where no
   // custody action has ever been taken has nothing to report, and saying so is not a failure.
+  // Four correct outcomes. "nothing from the record is frozen" is worded that way on purpose:
+  // the record is what is being summarised, and a scan may separately find unrecorded freezes.
   ok('detained reports frozen, nothing frozen, or no record',
-     /still frozen|nothing is frozen|no custody record/.test(r.stdout), r.stdout.slice(0, 160))
+     /still frozen|nothing from the record is frozen|no custody record|frozen with no record/.test(r.stdout),
+     r.stdout.slice(0, 200))
   const rj = spawnSync(process.execPath, [cli, '--json', 'detained'], { encoding: 'utf8' })
   let parsed = null
   try {
@@ -245,6 +248,127 @@ section('cli heal --custody')
      !/custody=ERROR/.test(r.stdout ?? ''), (r.stdout ?? '').slice(0, 200))
   const rHelp = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' })
   ok('--help mentions the custody reconcile', /custody/.test(rHelp.stdout))
+}
+
+// --- frozen with no record: the half that was invisible --------------------- //
+// Everything before this reconciled the freezes this tool performed. A process that is frozen
+// with no record of anybody freezing it is a different finding, and it was invisible by
+// construction: `detained` enumerates the record, so anything absent from the record cannot
+// appear in it. Answering it needs the opposite direction -- walk the machine, then subtract.
+
+section('unrecorded custody')
+{
+  const { mkdtempSync, writeFileSync, appendFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const g3 = await import('../lib/core.mjs')
+
+  const dir = mkdtempSync(join(tmpdir(), 'vsep-unrec-'))
+  const activity = join(dir, 'activity')
+  mkdirSync(activity, { recursive: true })
+  const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
+  const past = new Date(Date.now() - 2 * 3600 * 1000).toISOString()
+  const ctx3 = { logDir: dir }
+
+  const scanOf = (list, denied = 0) => async () => ({ ok: true, denied, suspended: list })
+
+  // Nothing in the record, something frozen on the machine.
+  const stranger = await g3.unrecordedCustody(ctx3, {
+    scanFn: scanOf([{ pid: 2222, name: 'unknown.exe', threads: 8, created: past }]),
+  })
+  ok('a frozen process with no record is found', stranger.unrecorded.length === 1,
+     JSON.stringify(stranger.unrecorded))
+  ok('and the reason says so', /no record/.test(stranger.unrecorded[0]?.why ?? ''))
+
+  // Now put a matching record in and it is no longer a stranger.
+  writeFileSync(join(activity, day), JSON.stringify({
+    t: past, kind: 'detain', action: 'suspended', pid: 2222, name: 'unknown.exe', created: past,
+  }) + NL_SHIM, 'utf8')
+  const known = await g3.unrecordedCustody(ctx3, {
+    scanFn: scanOf([{ pid: 2222, name: 'unknown.exe', threads: 8, created: past }]),
+  })
+  ok('a recorded freeze is not reported as unrecorded', known.unrecorded.length === 0,
+     JSON.stringify(known.unrecorded))
+
+  // Same pid, different process: a recycled number must not be mistaken for the recorded one.
+  const otherMoment = new Date(Date.now() - 60 * 1000).toISOString()
+  const recycled = await g3.unrecordedCustody(ctx3, {
+    scanFn: scanOf([{ pid: 2222, name: 'something-else.exe', threads: 3, created: otherMoment }]),
+  })
+  ok('a recycled pid is not mistaken for the recorded process', recycled.unrecorded.length === 1,
+     JSON.stringify(recycled.unrecorded))
+  ok('and says which of the two it is', /different process/.test(recycled.unrecorded[0]?.why ?? ''),
+     recycled.unrecorded[0]?.why)
+
+  // A scan that could not read everything must not be presented as a clean sweep.
+  const partial = await g3.unrecordedCustody(ctx3, { scanFn: scanOf([], 17) })
+  ok('a partial scan reports how much it could not read', partial.denied === 17, JSON.stringify(partial))
+
+  // A failed scan is a failure, not "nothing found".
+  const failed = await g3.unrecordedCustody(ctx3, {
+    scanFn: async () => ({ ok: false, reason: 'powershell is not available', suspended: [], denied: null }),
+  })
+  ok('a failed scan says so rather than reporting nothing', failed.ok === false &&
+     /not available/.test(failed.reason ?? ''), JSON.stringify(failed))
+
+  // Both findings reach the alert, and they are kept distinguishable in it.
+  const frozenZn = async (pids) => Object.fromEntries(pids.map((p) => [p,
+    { pid: p, exists: true, name: 'unknown.exe', threads: 8, suspended: 8, frozen: true, created: past }]))
+  // Throttle state comes from the record, so a line that merely *mentions* custody-alert must not
+  // be read as one. A released event carries the string in its hint text -- "run: volcano-separator
+  // detained" style guidance lives there -- and a plain substring match counted those, producing a
+  // reading of 11 alerts where the real count was zero.
+  // Append, never overwrite: the suspended record above is what makes the next assertion
+  // meaningful, and replacing the file silently removed it (which is how this test first failed).
+  const decoyLine = JSON.stringify({
+    t: new Date().toISOString(), kind: 'detain', action: 'released', pid: 2222, name: 'unknown.exe',
+    hint: 'nothing was resumed automatically; a custody-alert is not what this line is',
+  })
+  appendFileSync(join(activity, day), decoyLine + NL_SHIM, 'utf8')
+  ok('the decoy line really does contain the substring',
+     decoyLine.includes('custody-alert') && !/"kind"\s*:\s*"custody-alert"/.test(decoyLine),
+     'the fixture is not exercising the bug it claims to')
+
+  const decoy = await g3.reconcileCustody(ctx3, {
+    staleMs: 3600000, probeFn: frozenZn, scanFn: scanOf([]),
+  })
+  ok('a line that merely mentions the alert does not suppress the real one',
+     decoy.alerted === true,
+     `alerted=${decoy.alerted} -- the mention in a hint was read as an earlier alert`)
+
+  // A fresh directory for the next assertion. The alert above armed the one-hour throttle, and
+  // asserting on a throttled response would test the throttle rather than the thing under test --
+  // which is exactly how this check first failed.
+  const dir2 = mkdtempSync(join(tmpdir(), 'vsep-both-'))
+  const activity2 = join(dir2, 'activity')
+  mkdirSync(activity2, { recursive: true })
+  writeFileSync(join(activity2, day), JSON.stringify({
+    t: past, kind: 'detain', action: 'suspended', pid: 2222, name: 'unknown.exe', created: past,
+  }) + NL_SHIM, 'utf8')
+  const ctx4 = { logDir: dir2 }
+
+  const both = await g3.reconcileCustody(ctx4, {
+    staleMs: 3600000,
+    probeFn: frozenZn,
+    scanFn: scanOf([{ pid: 3333, name: 'ghost.exe', threads: 2, created: past }]),
+  })
+  ok('both kinds of finding reach the alert', both.alerted === true, JSON.stringify(both))
+  ok('forgotten custody is counted separately from unrecorded', both.stale.length === 1 && both.unrecorded.length === 1,
+     `stale=${both.stale.length} unrecorded=${both.unrecorded.length}`)
+  ok('the alert text distinguishes them',
+     /forgotten custody/.test(both.detail) && /frozen with no record/.test(both.detail), both.detail)
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
+section('cli detained --no-scan')
+{
+  const r = spawnSync(process.execPath, [cli, 'detained', '--no-scan'], { encoding: 'utf8' })
+  ok('detained --no-scan exits 0', r.status === 0, `status=${r.status}`)
+  const rFull = spawnSync(process.execPath, [cli, 'detained'], { encoding: 'utf8' })
+  ok('detained with the scan exits 0', rFull.status === 0, `status=${rFull.status}`)
+  ok('it either reports unrecorded freezes or says nothing is frozen',
+     /frozen with no record|nothing from the record is frozen|no custody record/.test(rFull.stdout),
+     rFull.stdout.slice(-200))
 }
 
 // A port nothing should be listening on.

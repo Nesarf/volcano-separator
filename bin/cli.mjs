@@ -95,9 +95,9 @@ Commands:
   policy [show|allow <e>|deny <e>|mode <m>]        what stealth is permitted, and what happens to the rest
   detain <pid> [--reason "..."] [--no-suspend]     freeze it, force its windows open, open a custody window
   release <pid>                                   resume a detained process
-  detained [--no-probe]                           what is under custody now, checked against the
-                                                  live system (a suspension is persistent, so a
-                                                  forgotten detain stays frozen)
+  detained [--no-probe] [--no-scan]               what is under custody now, checked against the
+                                                  live system, plus anything frozen with no
+                                                  record at all (a suspension is persistent)
   ps                 what is running right now, with ages (spots a wedged process)
   logs [n]           the last n uv transcripts, plus the heartbeat trail
   doctor             count historical start failures from the plugin log
@@ -535,12 +535,34 @@ async function main() {
           console.log('      the process holding this pid is not the one that was frozen')
         }
       }
+      // Frozen with no record of anybody freezing it. Walked separately because the loop above
+      // enumerates the record, so anything absent from the record can never appear in it.
+      if (opts['no-scan'] !== true) {
+        try {
+          const un = await g.unrecordedCustody(ctx)
+          if (un.ok && un.unrecorded.length) {
+            console.log()
+            console.log(C.yellow(`${un.unrecorded.length} process(es) are frozen with no record of a detain:`))
+            for (const u of un.unrecorded) {
+              console.log(`  pid ${String(u.pid).padEnd(8)} ${u.name ?? ''}  (${u.why})`)
+            }
+            console.log('Nothing here knows who froze them or why. A debugger and a stalled driver')
+            console.log('look the same from this side, so look before acting.')
+          } else if (un.ok && un.denied) {
+            console.log()
+            console.log(C.dim(`${un.denied} process(es) could not be inspected, so this is not a clean sweep.`))
+          }
+        } catch (e) {
+          console.log(C.dim(`unrecorded scan failed: ${e?.message ?? e}`))
+        }
+      }
+
       console.log()
       if (r.frozen.length) {
         console.log(C.red(`${r.frozen.length} process(es) are still frozen.`))
         console.log('A suspension is persistent: it stays frozen until something resumes it.')
       } else {
-        console.log(C.green('nothing is frozen now.'))
+        console.log(C.green('nothing from the record is frozen now.'))
       }
       process.exit(0)
     }
