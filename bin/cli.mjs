@@ -192,6 +192,27 @@ async function main() {
 
     case 'heal': {
       const t0 = Date.now()
+      // Custody reconciliation, run BEFORE the service chain is touched. A suspension is
+      // persistent, so a freeze nobody came back for stays frozen forever, and the only moment it
+      // gets noticed is when somebody thinks to ask -- which is exactly what does not happen.
+      //
+      // It runs first on purpose: the recorder's contract is that visibility is not a function of
+      // service health, and on a machine where uv is missing the chain fails at its first link. If
+      // this ran after that, the alert would go silent on precisely the broken machines that need
+      // watching. It resumes nothing; the alert names the command instead.
+      let cus = null
+      if (opts.custody) {
+        try {
+          const rec = await g.reconcileCustody(ctx)
+          cus = rec.alerted
+            ? { alerted: true, count: rec.stale.length, detail: rec.detail }
+            : { alerted: false, stale: rec.stale.length, why: rec.why }
+        } catch (e) {
+          // A custody failure must never make the service heartbeat look broken.
+          cus = { error: String(e?.message ?? e) }
+        }
+      }
+
       const r = await g.heal(ctx, { log, force: opts.force, requireDsh: opts['require-dsh'] === true })
 
       // Always leave a trace, even in heartbeat mode. A task that starts, does something and
@@ -230,23 +251,6 @@ async function main() {
           }
         } catch (e) {
           rl = { error: String(e?.message ?? e) }
-        }
-      }
-
-      // Custody reconciliation. A suspension is persistent, so a freeze nobody came back for
-      // stays frozen forever and the only moment it gets noticed is when somebody thinks to ask.
-      // This is the asking. It resumes nothing: releasing a process a person deliberately froze is
-      // their decision, so the alert names the command instead of running it.
-      let cus = null
-      if (opts.custody) {
-        try {
-          const rec = await g.reconcileCustody(ctx)
-          cus = rec.alerted
-            ? { alerted: true, count: rec.stale.length, detail: rec.detail }
-            : { alerted: false, stale: rec.stale.length, why: rec.why }
-        } catch (e) {
-          // A custody failure must never make the service heartbeat look broken.
-          cus = { error: String(e?.message ?? e) }
         }
       }
 
