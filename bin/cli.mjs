@@ -76,6 +76,7 @@ Commands:
   stop | restart
   activity [n]       the system-wide process/window/persistence record (default last 40)
   signals [minutes]  what looks like stealth, with evidence (observe-only)
+  decide [minutes]   what would be done about each signal -- still acts on nothing (--record keeps open questions)
   reveal windows [--show] [--all] [--filter re]   every top-level window; --show forces hidden ones visible
   reveal process <pid>                            everything observable about a live process
   reveal chain <pid>                              inherited chain, recovered from history
@@ -447,6 +448,32 @@ async function main() {
       if (!r.total) console.log(C.dim('  nothing flagged in this window'))
       console.log('')
       console.log(C.dim('  observe-only by design: findings are reported, never acted on'))
+      break
+    }
+
+    case 'decide': {
+      const mins = Number(opts._[1] ?? 120)
+      const r = g.decideSignals(ctx, { sinceMinutes: Number.isFinite(mins) ? mins : 120 })
+      let rec = null
+      if (opts.record && r.byVerdict.ask > 0) rec = g.recordDecisions(ctx, r.decisions)
+      if (opts.json) return emit({ ...r, recorded: rec })
+      console.log(`decisions over the last ${r.window}  (${r.observed} recorded events, ${r.total} findings)`)
+      console.log('')
+      console.log(`  allow  ${String(r.byVerdict.allow).padStart(4)}   covered by the allowlist, no decision needed`)
+      console.log(`  ask    ${String(r.byVerdict.ask).padStart(4)}   needs a human`)
+      console.log(`  note   ${String(r.byVerdict.note).padStart(4)}   recorded, not worth interrupting anyone`)
+      console.log(`  mode   ${r.mode}${r.mode === 'observe' ? C.green('   nothing would be done about any of them') : C.red('   enforcement is ON')}`)
+      console.log('')
+      for (const d of r.decisions) {
+        const v = d.verdict === 'ask' ? C.yellow('ASK ') : d.verdict === 'allow' ? C.green('ALLOW') : C.dim('NOTE ')
+        console.log(`  ${v} ${String(d.rule).padEnd(22)} ${d.subject}`)
+        console.log(`        ${C.dim(d.why)}`)
+        if (d.allowed) console.log(`        ${C.dim('allowed by ' + d.allowed)}`)
+      }
+      if (!r.total) console.log(C.dim('  nothing to decide in this window'))
+      if (rec) console.log(C.dim(`
+  recorded ${rec.written} open question(s) -> ${rec.file}`))
+      else if (r.byVerdict.ask) { console.log(''); console.log(C.dim('  add --record to keep these questions in the activity record')) }
       break
     }
 
