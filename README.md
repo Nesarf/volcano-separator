@@ -155,3 +155,7 @@ MIT
 ## Resource layer
 
 `resources` reports headroom; `defer` turns it into an exit code (0 = go, 3 = not now).
+
+## Custody
+
+`detained` lists what was frozen and reconciles each record against the live thread state, because a suspension stays in force until something resumes it.

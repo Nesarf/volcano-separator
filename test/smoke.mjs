@@ -85,6 +85,79 @@ ok('resources --json has a decision', resJson && typeof resJson.decision?.defer 
 const dNoWait = spawnSync(process.execPath, [cli, 'defer'], { encoding: 'utf8' })
 ok('defer exits 0 or 3', dNoWait.status === 0 || dNoWait.status === 3, `status=${dNoWait.status}`)
 
+// --- custody: is anything still frozen? ------------------------------------ //
+// The query exists because a suspension is persistent: a detain whose operator forgot about it
+// stays frozen with nothing on the machine saying so. The interesting part is that the first
+// version read the detain-*.json summaries, and on a real machine those had all vanished -- so
+// it answered "nothing under custody" while five shells had been frozen. The append-only
+// activity log is the source of truth; this checks the rebuild works from that alone.
+
+section('custody')
+{
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  // Imported here rather than relying on the later top-level import: this section runs before it.
+  const g = await import('../lib/core.mjs')
+  const dir = mkdtempSync(join(tmpdir(), 'vsep-custody-'))
+  const activity = join(dir, 'activity')
+  mkdirSync(activity, { recursive: true })
+  const day = 'activity-2000-01-01.ndjson'
+  const lines = [
+    // frozen, never released
+    { t: '2000-01-01T10:00:00Z', kind: 'detain', action: 'suspended', pid: 1111, name: 'cmd.exe' },
+    { t: '2000-01-01T10:00:01Z', kind: 'detain', action: 'revealed', pid: 1111 },
+    // frozen and released
+    { t: '2000-01-01T10:05:00Z', kind: 'detain', action: 'suspended', pid: 2222, name: 'cmd.exe' },
+    { t: '2000-01-01T10:06:00Z', kind: 'detain', action: 'released', pid: 2222, name: 'cmd.exe' },
+    // not a custody event at all
+    { t: '2000-01-01T10:07:00Z', kind: 'proc-start', name: 'explorer.exe' },
+  ]
+  const NL = String.fromCharCode(10)
+  writeFileSync(join(activity, day), lines.map((l) => JSON.stringify(l)).join(NL) + NL, 'utf8')
+  // A BOM on the first line must not cost an event.
+  writeFileSync(join(activity, 'activity-2000-01-02.ndjson'),
+    String.fromCharCode(0xfeff) + JSON.stringify({ t: '2000-01-02T09:00:00Z', kind: 'detain', action: 'suspended', pid: 3333, name: 'cmd.exe' }) + NL, 'utf8')
+
+  const ctx = { logDir: dir }
+  const rebuilt = g.rebuildCustody(ctx)
+  ok('rebuilds from the activity log alone', rebuilt.ok === true, JSON.stringify(rebuilt))
+  ok('found every suspend and release event', rebuilt.events === 4, `events=${rebuilt.events}`)
+  ok('three pids are known', Object.keys(rebuilt.pids).length === 3, JSON.stringify(Object.keys(rebuilt.pids)))
+  ok('the unreleased one is still recorded as suspended', rebuilt.pids['1111']?.suspended === true)
+  ok('the released one is recorded as released', rebuilt.pids['2222']?.suspended === false)
+  ok('ignores non-custody events', rebuilt.pids['undefined'] === undefined)
+  ok('a BOM does not cost an event', rebuilt.pids['3333']?.suspended === true,
+     'the BOM line was dropped')
+
+  // Without probing, nothing is claimed about the live system.
+  const noProbe = await g.custodyReport(ctx, { probe: false })
+  ok('probe:false claims nothing about the system',
+     noProbe.rows.every((r) => r.state === 'unverified'), JSON.stringify(noProbe.rows.map((r) => r.state)))
+  ok('probe:false still lists the records', noProbe.rows.length === 3)
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
+section('cli detained')
+{
+  const r = spawnSync(process.execPath, [cli, 'detained'], { encoding: 'utf8' })
+  ok('detained exits 0', r.status === 0, `status=${r.status}`)
+  ok('detained reports either frozen or nothing frozen',
+     /still frozen|nothing is frozen/.test(r.stdout), r.stdout.slice(0, 160))
+  const rj = spawnSync(process.execPath, [cli, '--json', 'detained'], { encoding: 'utf8' })
+  let parsed = null
+  try {
+    parsed = JSON.parse(rj.stdout)
+  } catch {
+    /* handled below */
+  }
+  ok('detained --json is valid JSON', parsed !== null)
+  ok('detained --json separates frozen from history',
+     parsed && Array.isArray(parsed.frozen) && Array.isArray(parsed.rows))
+  const rnp = spawnSync(process.execPath, [cli, 'detained', '--no-probe'], { encoding: 'utf8' })
+  ok('detained --no-probe exits 0', rnp.status === 0, `status=${rnp.status}`)
+}
+
 // A port nothing should be listening on.
 const DEAD_PORT = 59987
 

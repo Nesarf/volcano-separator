@@ -135,6 +135,11 @@ Write-Activity @{
     kind = 'detain'; action = $(if ($suspended) { 'suspended' } else { 'observed' })
     pid = $TargetPid; name = $name; cmd = $cmd
     why = 'flagged for custody; frozen so its own windows cannot be withdrawn'
+    # Creation time travels with the event so a later reader can tell this process apart from a
+    # different one that inherited the same pid. A pid is not an identity: a record for a frozen
+    # pid read as "released and running" while the process then on the machine was not the one
+    # that had been frozen.
+    created = $target.CreationDate.ToUniversalTime().ToString('o')
 }
 
 # ------------------------------------------------------------------ 2. reveal

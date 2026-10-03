@@ -92,6 +92,9 @@ Commands:
   policy [show|allow <e>|deny <e>|mode <m>]        what stealth is permitted, and what happens to the rest
   detain <pid> [--reason "..."] [--no-suspend]     freeze it, force its windows open, open a custody window
   release <pid>                                   resume a detained process
+  detained [--no-probe]                           what is under custody now, checked against the
+                                                  live system (a suspension is persistent, so a
+                                                  forgotten detain stays frozen)
   ps                 what is running right now, with ages (spots a wedged process)
   logs [n]           the last n uv transcripts, plus the heartbeat trail
   doctor             count historical start failures from the plugin log
@@ -473,6 +476,48 @@ async function main() {
       console.log('')
       console.log(C.dim('  the window offers ALLOW (records your decision) or RELEASE (just resumes it)'))
       break
+    }
+
+    case 'detained': {
+      const r = await g.custodyReport(ctx, { probe: opts['no-probe'] !== true })
+      if (opts.json) return emit(r)
+      if (!r.ok) {
+        console.log(C.yellow(`no custody record: ${r.reason}`))
+        process.exit(0)
+      }
+      console.log(`${r.rows.length} pid(s) in the record, ${r.events} event(s) across ${r.recordFiles} file(s)`)
+      console.log()
+      const label = {
+        frozen: C.red('FROZEN      '),
+        'frozen-after-release': C.red('STILL FROZEN'),
+        'resumed-without-release': C.yellow('NOT FROZEN  '),
+        'pid-reused': C.yellow('PID REUSED  '),
+        resumed: C.dim('released    '),
+        running: C.dim('not frozen  '),
+        exited: C.dim('exited      '),
+        unverified: C.dim('unverified  '),
+      }
+      for (const row of r.rows) {
+        console.log(`  ${label[row.state] ?? row.state}  pid ${String(row.pid).padEnd(8)} ${row.name ?? ''}`)
+        if (row.state === 'frozen' || row.state === 'frozen-after-release') {
+          console.log(`      frozen at ${row.frozenAt ?? '?'} -- nothing released it`)
+          console.log(`      release with: volcano-separator release ${row.pid}`)
+        }
+        if (row.state === 'resumed-without-release') {
+          console.log('      a release was recorded but it did not take; the process is still running')
+        }
+        if (row.state === 'pid-reused') {
+          console.log('      the process holding this pid is not the one that was frozen')
+        }
+      }
+      console.log()
+      if (r.frozen.length) {
+        console.log(C.red(`${r.frozen.length} process(es) are still frozen.`))
+        console.log('A suspension is persistent: it stays frozen until something resumes it.')
+      } else {
+        console.log(C.green('nothing is frozen now.'))
+      }
+      process.exit(0)
     }
 
     case 'release': {
