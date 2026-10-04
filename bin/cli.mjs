@@ -98,6 +98,9 @@ Commands:
   detained [--no-probe] [--no-scan]               what is under custody now, checked against the
                                                   live system, plus anything frozen with no
                                                   record at all (a suspension is persistent)
+  timeline [--all] [--days N]                     the life of each custody decision: frozen,
+                                                  what was done, how it ended, and what was
+                                                  reported while it was live
   ps                 what is running right now, with ages (spots a wedged process)
   logs [n]           the last n uv transcripts, plus the heartbeat trail
   doctor             count historical start failures from the plugin log
@@ -511,6 +514,67 @@ async function main() {
       console.log('')
       console.log(C.dim('  the window offers ALLOW (records your decision) or RELEASE (just resumes it)'))
       break
+    }
+
+    case 'timeline': {
+      const t = await g.custodyTimelineLive(ctx, {
+        sinceDays: opts.days ? Number(opts.days) : null,
+        probeFn: opts['no-probe'] === true ? async () => ({}) : null,
+      })
+      if (opts.json) return emit(t)
+      if (!t.ok) {
+        console.log(C.yellow(`no custody record: ${t.reason}`))
+        process.exit(0)
+      }
+      const open = t.open
+      const closed = t.lifecycles.filter((l) => l.endedAt)
+      console.log(`custody timeline  (${t.lifecycles.length} decision(s) across ${t.files} record file(s))`)
+      const dist = Object.entries(t.byOutcome).map(([k, v]) => `${k}: ${v}`).join(', ')
+      console.log(C.dim(`  ${dist}`))
+      console.log()
+
+      const showClosed = opts.all === true
+      const list = showClosed ? t.lifecycles : [...open, ...closed.slice(-3)]
+
+      for (const l of list) {
+        const when = (l.frozenAt ?? '').replace('T', ' ').slice(0, 19)
+        // An open decision means different things depending on whether the process still exists:
+        // with no process there is nothing to release, and the record is history rather than a
+        // to-do. Say which.
+        const liveNote = l.liveState === 'process gone' ? C.dim(' (process gone -- nothing to release)')
+          : l.liveState === 'still frozen' ? C.red(' (still frozen now)')
+          : l.liveState === 'running' ? C.yellow(' (running again, unreleased)')
+          : l.liveState === 'unknown' ? C.dim(' (live state unknown)') : ''
+        const end = l.endedAt ? `  ended after ${g.humanDuration(l.durationMs)}`
+                              : `  ${C.red('STILL OPEN')} for ${g.humanDuration(l.durationMs)}${liveNote}`
+        const head = l.endedAt ? C.dim('closed') : C.red('open  ')
+        console.log(`${head}  pid ${String(l.pid).padEnd(8)} ${l.name ?? ''}  ${when}`)
+        console.log(`       ${l.outcome}${end}`)
+        for (const e of l.entries.slice(1)) {
+          console.log(`         ${(e.at ?? '').slice(11, 19)}  ${e.what}${e.detail ? ' -- ' + e.detail : ''}`)
+        }
+        for (const n of l.notices) {
+          console.log(`         ${C.yellow((n.at ?? '').slice(11, 19) + '  ' + n.what)}`)
+          console.log(`            ${C.dim((n.detail ?? '').slice(0, 110))}`)
+        }
+        if (l.command) console.log(`       ${C.dim(l.command.slice(0, 110))}`)
+        console.log()
+      }
+      if (!showClosed && closed.length > 3) {
+        console.log(C.dim(`  ${closed.length - 3} earlier closed decision(s) not shown; --all for everything`))
+      }
+      const actionable = open.filter((l) => l.liveState === 'still frozen' || l.liveState === 'running')
+      if (open.length) {
+        console.log(actionable.length
+          ? C.red(`  ${actionable.length} open decision(s) still concern a live process.`)
+          : C.dim(`  all ${open.length} open decision(s) concern processes that no longer exist: history, not a to-do.`))
+        console.log()
+      }
+      if (!t.lifecycles.length) console.log(C.dim('  nothing recorded'))
+      if (t.systemNotices.length) {
+        console.log(C.dim(`  ${t.systemNotices.length} notice(s) not tied to a freeze`))
+      }
+      process.exit(0)
     }
 
     case 'detained': {

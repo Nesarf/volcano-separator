@@ -447,6 +447,113 @@ section('release notices')
   rmSync(dir2, { recursive: true, force: true })
 }
 
+// --- the life of a custody decision ----------------------------------------- //
+// Every custody event is already in the record, but scattered among fifty thousand unrelated
+// process events. Reconstructing one pid's history meant grepping a number and reading
+// timestamps -- work a tool should do. What matters here is that a re-detention is a SECOND
+// decision rather than a continuation, and that an open decision is only a to-do if the process
+// still exists.
+
+section('custody timeline')
+{
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const g5 = await import('../lib/core.mjs')
+
+  const dir = mkdtempSync(join(tmpdir(), 'vsep-tl-'))
+  const activity = join(dir, 'activity')
+  mkdirSync(activity, { recursive: true })
+  const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
+  const t = (mins) => new Date(Date.now() - mins * 60000).toISOString()
+  const put = (...events) => writeFileSync(join(activity, day),
+    events.map((e) => JSON.stringify(e)).join(NL_SHIM) + NL_SHIM, 'utf8')
+  const ctx6 = { logDir: dir }
+
+  put(
+    // released properly
+    { t: t(60), kind: 'detain', action: 'suspended', pid: 100, name: 'cmd.exe', cmd: 'cmd /k one', created: t(60) },
+    { t: t(60), kind: 'detain', action: 'revealed', pid: 100, windows: 1, forced: 0 },
+    { t: t(59), kind: 'detain', action: 'released', pid: 100, name: 'cmd.exe' },
+    // re-detained later: a second decision on the same pid
+    { t: t(30), kind: 'detain', action: 'suspended', pid: 100, name: 'cmd.exe', cmd: 'cmd /k two', created: t(30) },
+    { t: t(29), kind: 'detain', action: 'released', pid: 100, name: 'cmd.exe' },
+    // never released
+    { t: t(20), kind: 'detain', action: 'suspended', pid: 200, name: 'cmd.exe', cmd: 'cmd /k two', created: t(20) },
+    // a reveal that arrives after the release must not attach to a live lifecycle
+    { t: t(28), kind: 'detain', action: 'revealed', pid: 100, windows: 2, forced: 1 },
+    // an alert while the open one was live
+    { t: t(10), kind: 'custody-alert', action: 'stale', pid: 200, count: 1, detail: 'pid 200 frozen 0.2h' },
+    // a release notice with no matching freeze
+    { t: t(5), kind: 'custody-release-notice', action: 'released-by-something-else', pid: 900,
+      detail: 'pid 900 ...', hint: 'something unknown resumed it' },
+  )
+
+  const tl = g5.custodyTimeline(ctx6)
+  ok('one lifecycle per freeze, not per pid', tl.lifecycles.length === 3,
+     `lifecycles=${tl.lifecycles.length}`)
+  ok('a re-detention is a second decision', tl.lifecycles.filter((l) => l.pid === 100).length === 2,
+     JSON.stringify(tl.lifecycles.filter((l) => l.pid === 100).map((l) => l.frozenAt)))
+  ok('the released ones are closed and the other is open',
+     tl.byOutcome && tl.byOutcome.released === 2 && tl.byOutcome['never released'] === 1,
+     JSON.stringify(tl.byOutcome))
+  ok('a duration is computed for the closed ones',
+     tl.lifecycles.filter((l) => l.endedAt).every((l) => l.durationMs > 0),
+     JSON.stringify(tl.lifecycles.filter((l) => l.endedAt).map((l) => l.durationMs)))
+  ok('the command line is kept', /one/.test(tl.lifecycles[0].command ?? ''),
+     tl.lifecycles[0].command)
+  ok('the reveal is recorded as an entry', tl.lifecycles[0].entries.some((e) => /revealed/.test(e.what)))
+
+  const openOne = tl.lifecycles.find((l) => l.pid === 200)
+  ok('the alert is attached to the freeze it was about', openOne.notices.length === 1,
+     JSON.stringify(openOne.notices))
+  ok('an unattachable notice is kept as a system notice', tl.systemNotices.length >= 1,
+     JSON.stringify(tl.systemNotices))
+
+  // A reveal arriving after the release must not resurrect the closed lifecycle.
+  ok('a late reveal does not reopen a closed decision',
+     tl.lifecycles.filter((l) => !l.endedAt).length === 1,
+     JSON.stringify(tl.lifecycles.map((l) => [l.pid, l.outcome, l.entries.length])))
+
+  // With the live probe overlaid, an open decision about a process that is gone is history.
+  const gone = async (pids) => Object.fromEntries(pids.map((p) => [p, { pid: p, exists: false }]))
+  const live1 = await g5.custodyTimelineLive(ctx6, { probeFn: gone })
+  const openLive = live1.open.find((l) => l.pid === 200)
+  ok('an open decision about a dead process is marked as such',
+     openLive && openLive.liveState === 'process gone', JSON.stringify(openLive?.liveState))
+
+  const stillFrozen = async (pids) => Object.fromEntries(pids.map((p) => [p,
+    { pid: p, exists: true, name: 'cmd.exe', threads: 3, suspended: 3, frozen: true }]))
+  const live2 = await g5.custodyTimelineLive(ctx6, { probeFn: stillFrozen })
+  ok('an open decision about a frozen process is marked as actionable',
+     live2.open.find((l) => l.pid === 200)?.liveState === 'still frozen',
+     JSON.stringify(live2.open.map((l) => l.liveState)))
+
+  ok('durations read as durations', g5.humanDuration(5000) === '5s' &&
+     /m /.test(g5.humanDuration(150000)) && /h /.test(g5.humanDuration(9000000)),
+     `${g5.humanDuration(5000)} / ${g5.humanDuration(150000)} / ${g5.humanDuration(9000000)}`)
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
+section('cli timeline')
+{
+  const r = spawnSync(process.execPath, [cli, 'timeline'], { encoding: 'utf8' })
+  ok('timeline exits 0', r.status === 0, `status=${r.status}`)
+  ok('it reports either decisions or an empty record',
+     /custody timeline|no custody record/.test(r.stdout), r.stdout.slice(0, 160))
+  const rj = spawnSync(process.execPath, [cli, '--json', 'timeline'], { encoding: 'utf8' })
+  let parsed = null
+  try {
+    parsed = JSON.parse(rj.stdout)
+  } catch {
+    /* handled below */
+  }
+  ok('timeline --json is valid JSON', parsed !== null)
+  ok('timeline --json carries the lifecycles', parsed && Array.isArray(parsed.lifecycles))
+  const rnp = spawnSync(process.execPath, [cli, 'timeline', '--no-probe'], { encoding: 'utf8' })
+  ok('timeline --no-probe exits 0', rnp.status === 0, `status=${rnp.status}`)
+}
+
 // A port nothing should be listening on.
 const DEAD_PORT = 59987
 
