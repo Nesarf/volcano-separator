@@ -204,9 +204,15 @@ async function main() {
       if (opts.custody) {
         try {
           const rec = await g.reconcileCustody(ctx)
-          cus = rec.alerted
-            ? { alerted: true, count: rec.stale.length, detail: rec.detail }
-            : { alerted: false, stale: rec.stale.length, why: rec.why }
+          const rel = (rec.released ?? []).length
+          cus = {
+            alerted: rec.alerted,
+            released: rel,
+            forgotten: (rec.stale ?? []).length,
+            unrecorded: (rec.unrecorded ?? []).length,
+            detail: rec.detail,
+            why: rec.why,
+          }
         } catch (e) {
           // A custody failure must never make the service heartbeat look broken.
           cus = { error: String(e?.message ?? e) }
@@ -272,7 +278,11 @@ async function main() {
             `uv=${ctx.uvx ? 'y' : 'n'} profile=${ctx.profile} ` +
             `${r.steps?.length ? '| ' + r.steps.map((st) => st.step).join('>') : ''}` +
             `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh) : ''}` +
-            `${cus ? (cus.error ? ' | custody=ERROR' : (cus.alerted ? ' | custody=ALERT(' + cus.count + ')' : ' | custody=clear')) : ''}` +
+            `${cus ? (cus.error
+                ? ' | custody=ERROR'
+                : ' | custody=' + (cus.released ? 'RELEASED(' + cus.released + ')'
+                    : cus.alerted ? 'ALERT(forgotten:' + cus.forgotten + ',unrecorded:' + cus.unrecorded + ')'
+                    : 'clear')) : ''}` +
             `${rl ? ' | cdisk=' + (rl.error ? 'ERROR' : rl.gb + 'GB/flagged:' + rl.flagged + '/new:' + rl.fresh) : ''}` +
             '\n',
         )

@@ -371,6 +371,82 @@ section('cli detained --no-scan')
      rFull.stdout.slice(-200))
 }
 
+// --- released by something else: custody that somebody else ended ------------- //
+// The third finding, and the most informative: a process this tool froze that is running again
+// with no release through our own path. Something else resumed it. It is an event rather than a
+// condition, so it must be said once per freeze -- not once per heartbeat, and not never after a
+// re-detention.
+
+section('release notices')
+{
+  const { mkdtempSync, writeFileSync, appendFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const g4 = await import('../lib/core.mjs')
+
+  const dir = mkdtempSync(join(tmpdir(), 'vsep-rel-'))
+  const activity = join(dir, 'activity')
+  mkdirSync(activity, { recursive: true })
+  const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
+  const logFile = join(activity, day)
+  const t1 = new Date(Date.now() - 2 * 3600 * 1000).toISOString()
+  const ctx5 = { logDir: dir }
+
+  // The freeze, then a probe that says the process is running.
+  writeFileSync(logFile, JSON.stringify({
+    t: t1, kind: 'detain', action: 'suspended', pid: 5555, name: 'cmd.exe', created: t1,
+  }) + NL_SHIM, 'utf8')
+  // `created` must describe the real process, or the reconciliation rightly calls it a recycled
+  // pid instead -- which is how this fixture first failed.
+  const runningFn = async (pids) => Object.fromEntries(pids.map((p) => [p,
+    { pid: p, exists: true, name: 'cmd.exe', threads: 4, suspended: 0, frozen: false, created: t1 }]))
+  const notices = () => readFileSync(logFile, 'utf8').split(NL_SHIM)
+    .filter((l) => l.includes('"kind":"custody-release-notice"')).length
+
+  const found = await g4.unauthorizedReleases(ctx5, { probeFn: runningFn })
+  ok('a frozen process that is running again is noticed', found.releases.length === 1,
+     JSON.stringify(found.releases))
+  ok('and the reason says no release was recorded', /no release was recorded/.test(found.releases[0]?.why ?? ''))
+
+  await g4.reconcileCustody(ctx5, { probeFn: runningFn })
+  const afterFirst = notices()
+  ok('the notice reaches the record', afterFirst === 1, `notices=${afterFirst}`)
+
+  await g4.reconcileCustody(ctx5, { probeFn: runningFn })
+  ok('it is said once, not once per heartbeat', notices() === afterFirst,
+     `notices went ${afterFirst} -> ${notices()}`)
+
+  // Re-detained and released again: a second event, and it must be reported.
+  const t2 = new Date(Date.now() + 1000).toISOString()
+  appendFileSync(logFile, JSON.stringify({
+    t: t2, kind: 'detain', action: 'suspended', pid: 5555, name: 'cmd.exe', created: t1,
+  }) + NL_SHIM, 'utf8')
+  const again = await g4.unauthorizedReleases(ctx5, { probeFn: runningFn })
+  ok('a re-detained process released again is reported again', again.releases.length === 1,
+     JSON.stringify(again.releases))
+  await g4.reconcileCustody(ctx5, { probeFn: runningFn })
+  ok('and a second notice is written', notices() === 2, `notices=${notices()}`)
+
+  const last = JSON.parse(readFileSync(logFile, 'utf8').split(NL_SHIM)
+    .filter((l) => l.includes('"kind":"custody-release-notice"')).pop())
+  ok('the notice does not claim credit for the release', /nothing here did/.test(last.hint ?? ''),
+     last.hint)
+
+  // A process still frozen must not produce a release notice.
+  const frozenFn = async (pids) => Object.fromEntries(pids.map((p) => [p,
+    { pid: p, exists: true, name: 'cmd.exe', threads: 4, suspended: 4, frozen: true, created: t1 }]))
+  const dir2 = mkdtempSync(join(tmpdir(), 'vsep-rel2-'))
+  mkdirSync(join(dir2, 'activity'), { recursive: true })
+  writeFileSync(join(dir2, 'activity', day), JSON.stringify({
+    t: t1, kind: 'detain', action: 'suspended', pid: 6666, name: 'cmd.exe', created: t1,
+  }) + NL_SHIM, 'utf8')
+  const stillFrozen = await g4.unauthorizedReleases({ logDir: dir2 }, { probeFn: frozenFn })
+  ok('a process still frozen is not reported as released', stillFrozen.releases.length === 0,
+     JSON.stringify(stillFrozen.releases))
+
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(dir2, { recursive: true, force: true })
+}
+
 // A port nothing should be listening on.
 const DEAD_PORT = 59987
 
