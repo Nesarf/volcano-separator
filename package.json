@@ -39,7 +39,8 @@
     "status": "node bin/cli.mjs status",
     "heal": "node bin/cli.mjs heal",
     "doctor": "node bin/cli.mjs doctor",
-    "mcp": "node lib/mcp.mjs"
+    "mcp": "node lib/mcp.mjs",
+    "commands": "node test/commands.mjs"
   },
   "dependencies": {},
   "keywords": [

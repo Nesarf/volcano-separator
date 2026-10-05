@@ -297,7 +297,22 @@ Two habits worth knowing if you add to it:
 - **Assert the observation, not the method.** Where a check would otherwise match on a process name,
   it matches on the file growing instead; a name match finds the shell that is running the check.
 
-CI runs it on Node 20 and 22, on Linux and Windows.
+There is a second, blunter check next to it:
+
+```bash
+node test/commands.mjs      # or: npm run commands
+```
+
+It runs every command that reads, once, and looks at the exit code. That is cruder than the smoke
+suite and it is aimed at a different failure: the smoke suite asserts behaviour, and a large
+refactor does not break behaviour first -- it breaks reachability. A handler that loses an import,
+or a function that stops being re-exported, is invisible to tests that call the functions which
+survived. The commands that change the machine (stop, restart, serve, detain, release, warm
+--force, install-service) are deliberately absent, so this is safe to run on a working machine at
+any time; `guard clean` is included *because* it must refuse while the service is up, and its
+expected codes are written per command rather than assumed.
+
+CI runs the smoke suite on Node 20 and 22, on Linux and Windows.
 
 ## License
 
