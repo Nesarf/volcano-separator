@@ -49,8 +49,6 @@
     fails is reported rather than retried, because an entry that cannot be removed is one in use.
   - `simple-v24`, `interpreter-v4`, `environments-v2`, `git-v0` and `builds-v0` are never
     touched: removing the index cache only forces metadata to be re-fetched.
-  - Known gap: the in-use check and the delete are not atomic, so a process that starts using an
-    entry in between is not protected. Deleting to a quarantine name first would close it.
 
 ### Changed
 
@@ -67,6 +65,19 @@
     description says plainly that the flag is not read-only.
 
 ### Fixed
+
+- **`cache --apply` staged every removal by rename, closing a race the in-use scan could not.**
+  The scan of running processes and the `rmSync` that followed were not atomic, so a process that
+  started using an entry in between was not protected at all -- and a recursive `rmSync` can delete
+  half a tree before failing, leaving a running process with the files it had already mapped and
+  missing the ones it had not. The scan is now only a cheap pre-filter; each entry is renamed into
+  a staging directory first.
+  - Windows refuses to rename a directory while a file inside it is open -- **verified, not
+    assumed** -- so a refused rename is the authoritative, atomic in-use answer rather than a
+    better guess. An entry that refuses is reported as such and left alone.
+  - Checked both ways against the real cache: with a file inside an entry held open, the run
+    reported `refused by the filesystem (in use)` and removed nothing; with the lock released, the
+    same run removed the entry and left the staging directory empty.
 
 - **The signal layer's two ephemeral rules cannot fire on this machine.** `analyzeSignals` and
   `decideSignals` had no test coverage at all, and `ask` was always 0 — but zero false positives

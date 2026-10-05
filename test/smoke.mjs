@@ -12,7 +12,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -888,6 +888,55 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('the MCP status tool documents its deep flag as not read-only',
     /deep[\s\S]{0,400}NOT read-only/.test(mcpSrc), 'the deep property lost its warning')
   ok('the MCP status tool still defaults to no deep', /args\.deep === true/.test(mcpSrc), 'deep stopped being opt-in')
+}
+
+// ── uv cache prune stages by rename ─
+// The removal used to scan running processes and then rmSync the plan. Both halves were weak: the
+// scan and the delete are not atomic, and a recursive rmSync can delete half a tree before
+// failing. Staging by rename fixes both, because Windows refuses to rename a directory while a
+// file inside it is open -- so a refused rename is the in-use answer itself, not a guess. That
+// refusal is verified against a real held lock outside the suite; what is checked here is the
+// machinery around it, which Node can drive.
+{
+  section('uv cache prune stages by rename')
+  const uvc = await import('../lib/uvcache.mjs')
+  const base = join(tmpdir(), 'volcano-uvcache-' + process.pid)
+  const archive = join(base, 'archive-v0')
+  const entry = join(archive, 'FAKEHASH12345678')
+  rmSync(base, { recursive: true, force: true })
+  mkdirSync(entry, { recursive: true })
+  writeFileSync(join(entry, 'pyvenv.cfg'), 'home = x')
+  writeFileSync(join(entry, 'payload.bin'), 'data')
+
+  const plan = {
+    ok: true, archiveDir: archive,
+    targets: [{ hash: 'FAKEHASH12345678', dir: entry, bytes: 100, name: '(uvx environment)', reason: 'stale-environment' }],
+  }
+
+  const dry = uvc.applyUvPrune(plan, { dryRun: true })
+  ok('dry run removes nothing', dry.removed === 1 && dry.dryRun === true && existsSync(entry), JSON.stringify({ removed: dry.removed }))
+  ok('dry run does not create the staging directory', !existsSync(join(archive, '.volcano-staging')))
+
+  const real = uvc.applyUvPrune(plan, { dryRun: false })
+  ok('a real run removes the entry', real.removed === 1 && !existsSync(entry), JSON.stringify(real.refused))
+  ok('nothing was refused', Array.isArray(real.refused) && real.refused.length === 0, JSON.stringify(real.refused))
+  ok('the staging directory is emptied, not left behind',
+    !existsSync(join(archive, '.volcano-staging', 'FAKEHASH12345678')),
+    'staged entry survived')
+
+  // A target that vanished between planning and applying must be reported, not thrown: the plan
+  // is a snapshot and the machine moves underneath it.
+  const gone = {
+    ok: true, archiveDir: archive,
+    targets: [{ hash: 'GONEHASH00000000', dir: join(archive, 'GONEHASH00000000'), bytes: 1, name: 'x', reason: 'duplicate' }],
+  }
+  let threw = null
+  let res = null
+  try { res = uvc.applyUvPrune(gone, { dryRun: false }) } catch (e) { threw = String(e) }
+  ok('a target that vanished is reported rather than thrown', threw === null && res && res.refused.length === 1,
+    threw ? `threw ${threw}` : JSON.stringify(res && res.refused))
+
+  rmSync(base, { recursive: true, force: true })
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

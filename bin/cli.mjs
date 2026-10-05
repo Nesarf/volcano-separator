@@ -784,13 +784,15 @@ async function main() {
       console.log('')
       if (result) {
         console.log((result.dryRun ? C.yellow('dry-run') : C.green('applied')) + ': ' + (result.dryRun ? 'would remove ' : 'removed ') + result.removed + ' entries, ' + result.gb + ' GB')
-        for (const f of result.failed) console.log(C.dim('  kept, in use: ' + f.hash))
+        for (const f of result.refused || []) console.log(C.dim('  refused by the filesystem (in use): ' + f.hash))
+        for (const f of result.failed) console.log(C.dim('  staged but not deleted: ' + f.hash + ' at ' + f.at))
         if (result.dryRun) console.log(C.dim('  add --apply to actually remove'))
       } else {
         console.log(C.dim('  add --prune to list the exact removals, --apply to carry them out'))
       }
-      console.log(C.dim('  In-use entries are found by scanning the executable path of every running process.'))
-      console.log(C.dim('  A delete that fails is reported, not retried: an entry that cannot be removed is one in use.'))
+      console.log(C.dim('  Each removal is staged by renaming the entry first. Windows refuses to rename a'))
+      console.log(C.dim('  directory while a file inside it is open, so a refused rename IS the in-use answer --'))
+      console.log(C.dim('  authoritative and atomic, where scanning process paths is only a pre-filter.'))
       break
     }
 
