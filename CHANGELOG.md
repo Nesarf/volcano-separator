@@ -52,6 +52,24 @@
 
 ### Changed
 
+- **The README described a tool that no longer exists.** It called this a supervisor for the
+  Hindsight daemon and listed nine commands; there are thirty. Observation (`activity`, `busy`,
+  `reveal`, `redline`, `cache`) and incident response (`signals`, `decide`, `policy`, `detain`,
+  `timeline`) were absent from it entirely, so the front door of the repository understated the
+  project by two thirds. Rewritten around the three roles it actually has, with the command surface
+  grouped by role.
+  - Two claims in it were false rather than merely stale. It said the smoke suite is "deliberately
+    offline: no network, no uv, no running daemon" -- it drives the real CLI fifteen times and
+    invokes PowerShell, so on a machine with the service running it reads live state. And it called
+    the platform story portable while twenty-three call sites are Win32-specific; the platform
+    section now states the split instead, and says what porting would actually involve.
+  - `package.json` declared `os: ["win32", "darwin", "linux"]`. That field constrains where a
+    package may be installed rather than describing what it supports, so listing three platforms
+    while the platform layer is Windows-only stated something untrue in metadata. Removed, with the
+    real position documented in the README.
+  - `resources` and `defer` were implemented and reachable but absent from `--help`, having missed
+    the list when the resource layer landed in 1.1.0.
+
 - **`status` is read-only by default; `--deep` is what measures warmth.** Measuring the uv env
   means running `uvx --with pg0-embedded hindsight-embed@<v> --help`, and uvx builds an ephemeral
   environment in order to run anything at all -- so a status call against a cache with no matching

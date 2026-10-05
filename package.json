@@ -16,11 +16,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "os": [
-    "win32",
-    "darwin",
-    "linux"
-  ],
   "bin": {
     "volcano-separator": "bin/cli.mjs",
     "vsep": "bin/cli.mjs"

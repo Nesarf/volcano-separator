@@ -112,6 +112,8 @@ Commands:
   install-service    register the watchdog task: at logon + every N minutes
   uninstall-service
   service            show the watchdog task state
+  resources [n]      free memory, CPU load and the largest processes with their command lines
+  defer [--wait]     turn that into a verdict: exit 0 = go ahead, 3 = not now
 
 Options:
   --profile <name>   hindsight profile (default: coding-agent)
