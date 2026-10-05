@@ -12,7 +12,7 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -1075,8 +1075,11 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     try {
       const r = await rpc('tools/call', { name: t.name, arguments: {} })
       const text = r.result?.content?.[0]?.text ?? ''
+      // isError is NOT treated as a broken tool. An MCP tool that throws internally answers with a
+      // JSON-RPC error, which is checked below; `isError` in the result means the tool ran and its
+      // subject is unhealthy -- volcano_status reporting a down chain is it working. Treating that as
+      // failure made this check flaky, and would make it fail outright on a machine with no service.
       if (r.error) bad.push(`${t.name}: ${JSON.stringify(r.error).slice(0, 60)}`)
-      else if (r.result?.isError) bad.push(`${t.name}: reported an error -- ${text.slice(0, 60)}`)
       else if (!text.trim()) bad.push(`${t.name}: returned no text`)
       // The failure mode this test was written for: a renderer reading a field that is not there.
       else if (/undefined|\bNaN\b/.test(text)) bad.push(`${t.name}: output contains a placeholder -- ${text.split(String.fromCharCode(10))[0].slice(0, 70)}`)
@@ -1220,6 +1223,133 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // Functions, not just names: a re-export that resolves to undefined passes a key check.
   const notFunctions = EXPECTED.filter((n) => g[n] === undefined)
   ok('no export resolved to undefined', notFunctions.length === 0, notFunctions.join(', '))
+}
+
+// -- no module uses a symbol it did not import --
+// Splitting core.mjs produced this bug five times in one afternoon, and the shape is worth being
+// precise about: a function body moves to a new file, the imports it depended on do not come with
+// it, and the missing name only throws on the path that reaches it. An empty catch somewhere then
+// converts that throw into a plausible-looking answer -- custody.mjs reported "no activity record"
+// because readdirSync was not imported and the throw was caught as if the directory were empty.
+// That is the same shape as the recorder that wrote nothing, and the same shape as the allowlist
+// that could not fire.
+//
+// The first version only looked at node builtins, and a deliberate test proved it could not fail:
+// removing sleep's import from custody.mjs passed, because sleep comes from a sibling module. So
+// this indexes every module's exports and checks both.
+{
+  section('module imports')
+  const dir = join(projectDir, 'lib')
+  const files = readdirSync(dir).filter((f) => f.endsWith('.mjs'))
+  const BUILTIN_OF = {
+    readFileSync: 'node:fs', writeFileSync: 'node:fs', appendFileSync: 'node:fs', existsSync: 'node:fs',
+    mkdirSync: 'node:fs', readdirSync: 'node:fs', statSync: 'node:fs', rmSync: 'node:fs', renameSync: 'node:fs',
+    openSync: 'node:fs', closeSync: 'node:fs', readSync: 'node:fs', realpathSync: 'node:fs', mkdtempSync: 'node:fs',
+    join: 'node:path', resolve: 'node:path', dirname: 'node:path', basename: 'node:path', delimiter: 'node:path',
+    homedir: 'node:os', tmpdir: 'node:os', connect: 'node:net', spawn: 'node:child_process',
+    fileURLToPath: 'node:url', createInterface: 'node:readline',
+  }
+
+  // Comments and string literals go first. Without this the check reported nine modules that were
+  // fine: mcp.mjs describes itself as healing and warming, and a comment in platform.mjs names
+  // readActivity. A word in prose is not a reference.
+  //
+  // This is a character scan rather than a set of regexes, because every attempt to write those
+  // regexes here lost a backslash to one escaping layer or another -- which is the same reason the
+  // rest of this file builds its patterns from character codes.
+  const BS = String.fromCharCode(92)
+  const SQ = String.fromCharCode(39)
+  const DQ = String.fromCharCode(34)
+  const BT = String.fromCharCode(96)
+  const SLASH = String.fromCharCode(47)
+  const STAR = String.fromCharCode(42)
+  const CODE = (src) => {
+    let out = ''
+    let i = 0
+    while (i < src.length) {
+      const c = src[i]
+      const n = src[i + 1]
+      if (c === SLASH && n === STAR) {
+        const e = src.indexOf(STAR + SLASH, i + 2)
+        i = e === -1 ? src.length : e + 2
+        out += ' '
+        continue
+      }
+      if (c === SLASH && n === SLASH) {
+        const e = src.indexOf(NL_SHIM, i + 2)
+        i = e === -1 ? src.length : e
+        out += ' '
+        continue
+      }
+      if (c === SQ || c === DQ || c === BT) {
+        i++
+        while (i < src.length && src[i] !== c) {
+          if (src[i] === BS) i++
+          i++
+        }
+        i++
+        out += ' '
+        continue
+      }
+      out += c
+      i++
+    }
+    return out
+  }
+
+  // Then member accesses, so parts.join(' | ') is not read as node:path's join.
+  const DOT_MEMBER = new RegExp('[' + String.fromCharCode(46) + '][' + String.fromCharCode(92) + 's]*[A-Za-z_$][A-Za-z0-9_$]*', 'g')
+  const NON_WORD = new RegExp('[^A-Za-z0-9_$]+')
+  const bareNames = (src) => new Set(CODE(src).replace(DOT_MEMBER, ' ').split(NON_WORD))
+
+  const sources = {}
+  for (const f of files) sources[f] = readFileSync(join(dir, f), 'utf8')
+
+  const exportsOf = {}
+  for (const [f, src] of Object.entries(sources)) {
+    const names = new Set()
+    const code = CODE(src)
+    for (const m of code.matchAll(/export (?:async )?function (\w+)/g)) names.add(m[1])
+    for (const m of code.matchAll(/export const (\w+)/g)) names.add(m[1])
+    for (const m of code.matchAll(/export \{([^}]*)\}/g)) {
+      for (const piece of m[1].split(',')) {
+        const n = piece.trim().split(/\s+as\s+/).pop().trim()
+        if (n) names.add(n)
+      }
+    }
+    exportsOf[f] = names
+  }
+
+  const offenders = []
+  for (const [f, src] of Object.entries(sources)) {
+    const body = bareNames(src.split(NL_SHIM).filter((l) => !l.trim().startsWith('import ')).join(NL_SHIM))
+    const imported = new Set()
+    for (const m of src.matchAll(/import \{([^}]*)\}/g)) {
+      for (const piece of m[1].split(',')) {
+        const n = piece.trim().split(/\s+as\s+/).pop().trim()
+        if (n) imported.add(n)
+      }
+    }
+    const code = CODE(src)
+    const own = new Set(exportsOf[f])
+    for (const m of code.matchAll(/(?:export )?(?:async )?function (\w+)/g)) own.add(m[1])
+    for (const m of code.matchAll(/(?:export )?const (\w+)/g)) own.add(m[1])
+
+    for (const name of Object.keys(BUILTIN_OF)) {
+      if (body.has(name) && !imported.has(name)) offenders.push(f + ': ' + name + " from '" + BUILTIN_OF[name] + "'")
+    }
+    for (const [other, names] of Object.entries(exportsOf)) {
+      if (other === f) continue
+      for (const name of names) {
+        if (own.has(name) || imported.has(name)) continue
+        if (body.has(name)) offenders.push(f + ': ' + name + " from './" + other + "'")
+      }
+    }
+  }
+  ok('every module imports the symbols it uses', offenders.length === 0, offenders.join(' | '))
+  ok('the check looked at every module and indexed its exports',
+    files.length >= 6 && Object.values(exportsOf).reduce((a, x) => a + x.size, 0) > 50,
+    files.length + ' module(s), ' + Object.values(exportsOf).reduce((a, x) => a + x.size, 0) + ' export(s)')
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
