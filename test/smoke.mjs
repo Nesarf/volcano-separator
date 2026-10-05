@@ -11,6 +11,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -1780,6 +1781,78 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   rmSync(scratch, { recursive: true, force: true })
   rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+}
+
+// ── in-place encryption: the order is the safety, not the cipher ─
+// The journal records the original's sha256 before the file is touched, and the ciphertext is
+// decrypted back and compared BEFORE it replaces anything. Without that step this is a file shredder
+// with extra ceremony.
+{
+  section('in-place encryption')
+  const cry = await import('../lib/crypt.mjs')
+  const g = await import('../lib/core.mjs')
+  const base = join(tmpdir(), 'vsep-cry-' + process.pid)
+  mkdirSync(base, { recursive: true })
+  const ctx = {
+    ...g.resolveContext({}),
+    cryptJournalDir: join(base, 'crypt'),
+    cryptKeyFile: join(base, 'crypt.key'),
+  }
+  const target = join(base, 'secret.bin')
+  const original = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 37) % 256))
+  writeFileSync(target, original)
+  const before = createHash('sha256').update(original).digest('hex')
+
+  if (process.platform !== 'win32') {
+    ok('in-place encryption is Windows-only (skipped honestly)', true, '')
+  } else {
+    const dry = await cry.encryptFile(ctx, { path: target, dryRun: true })
+    ok('a dry run reports and changes nothing',
+      dry.ok === true && dry.dryRun === true && readFileSync(target).equals(original), JSON.stringify(dry.detail))
+
+    const enc = await cry.encryptFile(ctx, { path: target })
+    ok('encrypt reports success', enc.ok === true, JSON.stringify(enc.detail))
+
+    const afterBytes = readFileSync(target)
+    ok('the bytes on disk actually changed', !afterBytes.equals(original), 'the file was not rewritten')
+    ok('and the file is now one of ours, read from the magic rather than the name',
+      cry.isEncrypted(target) === true, 'magic missing')
+    ok('the plaintext is not recoverable by reading it as bytes',
+      afterBytes.indexOf(original.subarray(0, 64)) === -1, 'plaintext found in the ciphertext')
+
+    const spec = JSON.parse(readFileSync(enc.journalFile, 'utf8').replace(/^\uFEFF/, ''))
+    ok('the journal records the original sha256 before the file was touched',
+      spec.originalSha256 === before, `${spec.originalSha256} vs ${before}`)
+    ok('and it is signed, so a forged journal is not acted on',
+      typeof spec.hmac === 'string' && spec.hmac.length > 20, JSON.stringify(spec.hmac))
+
+    // Encrypting twice must not double-wrap.
+    const again = await cry.encryptFile(ctx, { path: target })
+    ok('encrypting an already-encrypted file is refused rather than double-wrapped',
+      again.alreadyEncrypted === true, JSON.stringify(again))
+
+    // The undo, and the property that matters: byte-for-byte.
+    const dec = await cry.decryptFile(ctx, { journal: enc.journalFile })
+    ok('decrypt reports success', dec.ok === true, JSON.stringify(dec.detail))
+    ok('THE BYTES ARE IDENTICAL TO THE ORIGINAL',
+      readFileSync(target).equals(original), 'the restore did not reproduce the original bytes')
+    ok('and the restored hash matches what the journal recorded', dec.restoredSha256 === before, dec.restoredSha256)
+
+    // A forged journal is refused, and refusing must not damage anything.
+    const enc2 = await cry.encryptFile(ctx, { path: target })
+    const edited = { ...JSON.parse(readFileSync(enc2.journalFile, 'utf8').replace(/^\uFEFF/, '')), originalSha256: '0'.repeat(64) }
+    writeFileSync(enc2.journalFile, JSON.stringify(edited, null, 2))
+    const refused = await cry.decryptFile(ctx, { journal: enc2.journalFile })
+    ok('an edited journal is refused', refused.ok === false && refused.refused === true, JSON.stringify(refused.detail))
+    ok('and it says why rather than "failed"', /changed since this tool wrote it|not written by it/.test(refused.detail), refused.detail)
+    ok('and refusing left the ciphertext intact', cry.isEncrypted(target) === true, 'the file was damaged by a refusal')
+
+    const list = cry.encryptedFileList(ctx)
+    const mine = list.entries.find((e) => e.path === target)
+    ok('the list reads state from the bytes', mine?.state === 'encrypted' && mine?.encrypted === true, JSON.stringify(mine))
+  }
+
+  rmSync(base, { recursive: true, force: true })
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

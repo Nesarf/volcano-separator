@@ -25,6 +25,7 @@ import * as g from '../lib/core.mjs'
 import * as res from '../lib/resources.mjs'
 import * as uvc from '../lib/uvcache.mjs'
 import * as enf from '../lib/enforce.mjs'
+import * as cry from '../lib/crypt.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -105,6 +106,12 @@ Commands:
                      reach into a process already running from it -- use detain for those.
   restore <journal>  put an isolated file's original ACL back
   isolated           what this tool has isolated and not undone
+  encrypt <path> [--dry-run]
+                     encrypt a file in place. Refuses if it is in use, writes the key before touching
+                     anything, and proves the ciphertext decrypts back to the original bytes BEFORE
+                     replacing them. Rewrites the bytes, so any signature it carried no longer holds.
+  decrypt <journal>  restore the original bytes, refusing if they do not match the recorded sha256
+  encrypted          what this tool has encrypted, with the state read from the bytes
   evidence           what a mode other than observe would have done, per day, accumulated
   release <pid>                                   resume a detained process
   detained [--no-probe] [--no-scan]               what is under custody now, checked against the
@@ -578,6 +585,48 @@ async function main() {
       if (!r.ok) { console.log(C.red('FAIL') + ' restore: ' + r.detail); process.exit(1) }
       console.log(`${C.green('ok')} ${r.detail}`)
       console.log(`  ${r.path}`)
+      break
+    }
+
+    case 'encrypt': {
+      const t = opts._[1] ?? ''
+      const r = await cry.encryptFile(ctx, { path: t, dryRun: opts.dryRun === true })
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red('FAIL') + ' encrypt: ' + r.detail); process.exit(1) }
+      if (r.dryRun) { console.log(`${C.yellow('dry-run')} would encrypt ${r.path} (${r.bytes} bytes)`); break }
+      if (r.alreadyEncrypted) { console.log(`${C.green('ok')} already a container: ${r.path}`); break }
+      console.log(`${C.green('ok')} encrypted in place: ${r.path}`)
+      console.log(`  ${r.bytes} -> ${r.encryptedBytes} bytes`)
+      console.log(`  sha256     ${r.originalSha256}`)
+      console.log(`  key        ${r.keyFile}${r.keyCreated ? C.yellow('  (created just now)') : ''}`)
+      console.log(`  undo       ${r.decryptCommand}`)
+      console.log('')
+      console.log(C.yellow('  boundary   ') + 'encryption rewrites the bytes, so any hash or signature this file')
+      console.log(C.dim('             carried no longer holds. The undo restores the exact bytes, and the'))
+      console.log(C.dim('             journal records their sha256 so it can be checked rather than believed.'))
+      break
+    }
+
+    case 'decrypt': {
+      const j = opts._[1] ?? ''
+      const r = await cry.decryptFile(ctx, { journal: j })
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red('FAIL') + ' decrypt: ' + r.detail); if (r.note) console.log(C.dim('  ' + r.note)); process.exit(1) }
+      if (r.alreadyDecrypted) { console.log(`${C.green('ok')} nothing to undo: ${r.path}`); break }
+      console.log(`${C.green('ok')} restored: ${r.path} (${r.bytes} bytes)`)
+      console.log(`  ${r.detail}`)
+      break
+    }
+
+    case 'encrypted': {
+      const l = cry.encryptedFileList(ctx)
+      if (opts.json) return emit(l)
+      console.log(`encryption journals: ${l.dir}`)
+      if (!l.entries.length) { console.log(C.dim('  (none)')); break }
+      for (const e of l.entries) {
+        console.log(`  ${String(e.state ?? '?').padEnd(13)} ${e.path}`)
+        console.log(C.dim(`                ${e.journal}`))
+      }
       break
     }
 

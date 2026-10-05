@@ -39,6 +39,24 @@
 
 ### Added
 
+- **`encrypt` / `decrypt` / `encrypted` -- in-place encryption, and the undo that makes it defensible.**
+  AES-256-GCM, key protected by DPAPI for this machine. **The safety is the order, not the cipher:**
+  refuse if the file is in use; persist the key FIRST, and encrypt nothing if the key cannot be
+  written; record the original's sha256 in a signed journal before touching the file; write the
+  ciphertext beside the original; **decrypt it back and compare the hash**; and only then move it over
+  the original. Without that fifth step this is a file shredder with extra ceremony.
+  - **The boundary claim is per-act, not shared.** `isolate` does not move, rename, rewrite or delete,
+    and that stays true -- it changes an ACL. Encryption rewrites the bytes and cannot avoid a rename.
+    Those two cannot share one sentence, and the command prints its own boundary rather than borrowing
+    the reassuring one.
+  - `decrypt` refuses a journal that has been changed since this tool wrote it, and refuses to write
+    back bytes that do not match the recorded sha256 -- an undo that silently swaps one file for
+    another is not an undo. A refusal changes nothing.
+  - Fifteen checks, including the byte-for-byte comparison and that a refusal leaves the ciphertext
+    intact.
+
+### Security
+
 - **`volcano_isolated` and `volcano_evidence` in the MCP surface** (13 tools -> 15). Both read-only.
   `isolate` and `restore` are deliberately still not exposed: an agent should not be able to change
   what can execute on this machine, and that line is not worth crossing for convenience.
