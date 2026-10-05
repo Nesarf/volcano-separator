@@ -25,6 +25,28 @@ param(
 $ErrorActionPreference = 'Continue'
 $script:SelfPid = $PID
 
+# Redaction lives in its own file so the smoke suite can exercise the rules without starting the
+# recorder (the main loop below runs on load, so this script cannot be dot-sourced).
+#
+# If it is missing, do NOT fall back to recording the raw command line: this log is append-only and
+# several views read it, so a secret written once is written for good. Falling back to the
+# executable alone keeps the record useful -- exeFromCmd, the signals rules and the custody
+# timeline all work from the executable path -- so a missing file degrades transparency rather
+# than leaking credentials.
+$redactPath = Join-Path $PSScriptRoot 'redact.ps1'
+if (Test-Path $redactPath) {
+    . $redactPath
+} else {
+    function Protect-CommandLine {
+        param([AllowNull()][string]$CommandLine)
+        if ([string]::IsNullOrEmpty($CommandLine)) { return $CommandLine }
+        $t = $CommandLine.Trim()
+        $i = $t.IndexOf(' ')
+        if ($i -lt 0) { return $t }
+        return $t.Substring(0, $i) + ' <arguments withheld: redact.ps1 missing>'
+    }
+}
+
 # The directory must exist before anything tries to create a file in it. Getting this order wrong
 # is what silently disabled this recorder: the guard ran first, failed to open its lock file because
 # the directory was missing, and treated that as 'another instance holds it' -- so the script exited 0
@@ -128,7 +150,11 @@ function Get-ProcDetail {
         $o = Invoke-CimMethod -InputObject $cim -MethodName GetOwner -ErrorAction SilentlyContinue
         if ($o -and $o.User) { $user = "$($o.Domain)\$($o.User)" }
     } catch { }
-    return @{ cmd = [string]$cim.CommandLine; ppid = [int]$cim.ParentProcessId; user = $user; exe = [string]$cim.ExecutablePath }
+    # Redacted here, at the point the command line enters the record. Secrets travel in command
+    # lines -- --token, AWS_SECRET_ACCESS_KEY=, Authorization: Bearer ... -- and this log is
+    # append-only and read by several views, so this is the last place the value can be removed.
+    # The executable token is preserved: exeFromCmd parses it back out to decide what ran.
+    return @{ cmd = (Protect-CommandLine ([string]$cim.CommandLine)); ppid = [int]$cim.ParentProcessId; user = $user; exe = [string]$cim.ExecutablePath }
 }
 
 # Processes whose window title we still want to sample (a window appears slightly after start).

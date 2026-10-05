@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Security
+
+- **Command lines are redacted before they are written.** The recorder stores every process's full
+  command line, because a command line is often the only thing that distinguishes an expected
+  process from an unexpected one -- and for exactly the same reason it is where secrets travel.
+  `app.exe --token abc123`, `mysql -phunter2`, `AWS_SECRET_ACCESS_KEY=...`,
+  `curl -H "Authorization: Bearer ..."` all landed in an append-only log that several views read.
+  A tool built to make the machine legible must not become the place credentials are archived.
+  - Redaction happens at the WRITE point, in `bin/redact.ps1`, before the line reaches disk.
+    Redacting only on display would leave the secret in the file and merely hide it from the
+    default view -- worse than not redacting, because it looks safe.
+  - `redactCommandLine` in `lib/core.mjs` is a second implementation, for rendering records written
+    before redaction existed. Two implementations of a security-relevant function is a smell, so
+    the smoke suite feeds one fixture to both and checks every expected output, not merely that
+    they agree -- two identically-wrong implementations agree perfectly.
+  - The rules are deliberately narrow: explicit secret-bearing flags, assignments to
+    secret-looking names, Authorization/Bearer headers, and URL credentials. Long random-looking
+    strings are NOT redacted. Hashes, GUIDs, build ids and base64 in ordinary arguments are
+    common, and a rule that guesses would either bury the log in placeholders or teach people to
+    ignore them.
+  - The executable token is never touched: `exeFromCmd` parses it out of the same string to decide
+    which process ran, and the `binary-vanished` rule depends on it.
+  - If `redact.ps1` is missing the recorder falls back to the executable alone rather than
+    recording raw command lines, so a missing file degrades transparency instead of leaking.
+  - Three bugs were found in the Authorization rule by running it rather than reading it, after
+    reading it looked correct twice: consuming only `authorization:` ate the word Bearer and left
+    the token in the clear while *looking* redacted; a greedy value swallowed the closing quote of
+    the enclosing argument and with it the next argument; and `Authorization: Basic <base64>`
+    stopped at the space after the scheme and exposed the credentials.
+
 ### Added
 
 - **uv cache hygiene** (`lib/uvcache.mjs`, CLI `cache`). The cache had grown to 8.60 GB across
@@ -14,11 +44,13 @@
   - `cache` reports, `--prune` lists the exact removals, `--apply` carries them out. Measured:
     60 entries, 5.87 GB, leaving 2.76 GB.
   - In-use detection is the safety argument, not a nicety: a cache entry is reproducible, so
-    deleting one costs a re-download — but deleting the entry a running daemon executes from is
+    deleting one costs a re-download -- but deleting the entry a running daemon executes from is
     an outage. Detection scans the executable path of every running process, and a delete that
     fails is reported rather than retried, because an entry that cannot be removed is one in use.
   - `simple-v24`, `interpreter-v4`, `environments-v2`, `git-v0` and `builds-v0` are never
     touched: removing the index cache only forces metadata to be re-fetched.
+  - Known gap: the in-use check and the delete are not atomic, so a process that starts using an
+    entry in between is not protected. Deleting to a quarantine name first would close it.
 
 ### Fixed
 

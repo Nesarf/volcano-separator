@@ -780,6 +780,90 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(dir, { recursive: true, force: true })
 }
 
+// ── command-line redaction: both implementations, one fixture ─
+// The recorder redacts at the WRITE point (bin/redact.ps1), because the log is append-only and a
+// secret written once is written for good. lib/core.mjs carries a second implementation, for
+// rendering records written before redaction existed.
+//
+// Two implementations of a security-relevant function is a smell, so this feeds one fixture to
+// both. Agreement alone is not enough, though: two identically-wrong implementations agree
+// perfectly. So every expected output is written down here as well.
+{
+  section('command-line redaction')
+  const g = await import('../lib/core.mjs')
+  const BS = String.fromCharCode(92)
+  const winCmd = 'C:' + BS + 'Windows' + BS + 'System32' + BS + 'cmd.exe /c echo hello'
+  const cfgPath = 'C:' + BS + 'cfg' + BS + 'secret.json'
+
+  const CASES = [
+    ['app.exe --token abc123', 'app.exe --token <redacted>'],
+    ['app.exe --token=abc123 --verbose', 'app.exe --token=<redacted> --verbose'],
+    ['app.exe --password "hunter two"', 'app.exe --password "<redacted>"'],
+    ['mysql.exe -phunter2 -u root', 'mysql.exe -p<redacted> -u root'],
+    // a port is not a password
+    ['mysql.exe -p 5432 -u root', 'mysql.exe -p 5432 -u root'],
+    ['cmd.exe /c SET AWS_SECRET_ACCESS_KEY=abc123def', 'cmd.exe /c SET AWS_SECRET_ACCESS_KEY=<redacted>'],
+    // Three bugs lived in this one rule, all found by running it rather than reading it:
+    // consuming only "authorization:" left the token in the clear; a greedy value ate the
+    // enclosing quote and the next argument; and Basic <base64> stopped at the space after the
+    // scheme and exposed the credentials.
+    ['curl.exe -H "Authorization: Bearer eyJhbGciOi.J9" https://x', 'curl.exe -H "Authorization: <redacted>" https://x'],
+    ['curl.exe -H "Authorization: Basic dXNlcjpwYXNz" https://x', 'curl.exe -H "Authorization: <redacted>" https://x'],
+    ['curl.exe -H "Authorization: rawvalue" -o out.bin https://x', 'curl.exe -H "Authorization: <redacted>" -o out.bin https://x'],
+    ['curl.exe -H "Bearer eyJhbGciOi.J9" https://x', 'curl.exe -H "Bearer <redacted>" https://x'],
+    ['git.exe clone https://user:ghp_secret@github.com/a/b.git', 'git.exe clone https://user:<redacted>@github.com/a/b.git'],
+    // ordinary commands must pass through untouched
+    [winCmd, winCmd],
+    ['python.exe -c print(1) --api-key KEY123', 'python.exe -c print(1) --api-key <redacted>'],
+    ['node.exe --inspect --port 9229 app.js', 'node.exe --inspect --port 9229 app.js'],
+    // --secret-file names a file, not a secret: it must survive
+    ['app.exe --secret-file ' + cfgPath, 'app.exe --secret-file ' + cfgPath],
+  ]
+
+  let jsWrong = []
+  for (const [input, expected] of CASES) {
+    const got = g.redactCommandLine(input)
+    if (got !== expected) jsWrong.push(`${input} -> ${got}`)
+  }
+  ok('redact: every case matches its expected output', jsWrong.length === 0, jsWrong.join(' | '))
+
+  // The executable is what exeFromCmd parses out of this same string to decide what ran, and the
+  // signals rules depend on it. Redaction must leave the first token alone.
+  const redactedWin = g.redactCommandLine(winCmd + ' --token abc')
+  ok('redact: the executable token survives', redactedWin.startsWith('C:' + BS + 'Windows' + BS + 'System32'), redactedWin)
+
+  // The same fixture through the PowerShell implementation.
+  const fixture = join(tmpdir(), 'volcano-redact-fixture-' + process.pid + '.json')
+  writeFileSync(fixture, JSON.stringify(CASES.map(([i]) => i)))
+  const redactPs1 = join(projectDir, 'bin', 'redact.ps1')
+  const ps = spawnSync('powershell', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+    '. "' + redactPs1 + '"; ' +
+    '$c = Get-Content -Raw "' + fixture + '" | ConvertFrom-Json; ' +
+    '$c | ForEach-Object { Protect-CommandLine $_ } | ConvertTo-Json -Compress',
+  ], { encoding: 'utf8', timeout: 120000 })
+  rmSync(fixture, { force: true })
+
+  // Windows-only, like the rest of the platform layer: on a host without PowerShell the check
+  // cannot run, and saying so is better than a green tick that measured nothing.
+  if (ps.error || typeof ps.stdout !== 'string' || !ps.stdout.trim()) {
+    ok('redact: PowerShell implementation unavailable on this host (skipped honestly)', true, '')
+  } else {
+    let psOut = null
+    try { psOut = JSON.parse(ps.stdout.trim()) } catch { psOut = null }
+    if (!Array.isArray(psOut)) psOut = [psOut]
+    const psWrong = CASES.filter(([input, expected], i) => psOut[i] !== expected).map(([input]) => input)
+    ok('redact: PowerShell matches the fixture on every case',
+      psWrong.length === 0 && psOut.length === CASES.length,
+      `returned ${psOut.length}/${CASES.length}; differs on: ${psWrong.join(' | ')}`)
+    const diverged = CASES.map(([input], i) => [input, i])
+      .filter(([, i]) => g.redactCommandLine(CASES[i][0]) !== psOut[i])
+      .map(([input]) => input)
+    ok('redact: the two implementations agree with each other',
+      diverged.length === 0, diverged.join(' | '))
+  }
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
