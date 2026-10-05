@@ -21,6 +21,14 @@ const here = dirname(fileURLToPath(import.meta.url))
 const projectDir = resolve(here, '..')
 const cli = join(projectDir, 'bin', 'cli.mjs')
 
+// Source-text assertions read every module, not one named file. They are about a property the
+// code has -- the collector checks the image name, the probe resolves offline -- and saying
+// "core.mjs contains this string" made them break the moment the code moved to another module,
+// which is a property of the file layout and not of the code.
+const libSource = () => readdirSync(join(projectDir, 'lib'))
+  .filter((f) => f.endsWith('.mjs'))
+  .map((f) => readFileSync(join(projectDir, 'lib', f), 'utf8'))
+  .join(NL_SHIM)
 let failures = 0
 let checks = 0
 
@@ -1130,7 +1138,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // The two conditions are independent, and both are required. Asserted on the source, because the
   // decision is made in PowerShell and staging a fake daemon chain is not something a test should
   // do to a live machine.
-  const src = readFileSync(join(projectDir, 'lib', 'core.mjs'), 'utf8')
+  const src = libSource()
   ok('the collector still checks the image name',
     /\$allowed -notcontains \$name/.test(src), 'the name check was dropped')
   ok('the collector also requires the command line to name the daemon or the port',
@@ -1180,7 +1188,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   // Asserted on the source, because "it did not download this time" is not the property that
   // matters -- "it cannot download" is, and only the flag guarantees that.
-  const src = readFileSync(join(projectDir, 'lib', 'core.mjs'), 'utf8')
+  const src = libSource()
   ok('the probe resolves offline, so it cannot populate the cache it is measuring',
     /uvFlags\(ctx\), '--offline', '--with'/.test(src), 'the --offline flag was dropped from the probe')
   // The warm-up itself must still be allowed to download; that is its job.
