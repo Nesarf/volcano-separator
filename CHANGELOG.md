@@ -22,6 +22,28 @@
 
 ### Security
 
+- **The daemon collector now identifies the daemon instead of a name.** `stop`'s second level
+  walks the port owner's parent chain and kills what it collects, and its whole admission test was
+  `@('python.exe','pythonw.exe','hindsight-api.exe','uv.exe','uvx.exe') -contains $p.Name`. Any
+  python.exe from anywhere passed, and the anchor is only "something is listening on 9077", which is
+  not by itself proof of what it is. A process could be killed for resembling the target.
+  - The real chain was measured rather than assumed. Every member names either the daemon or the
+    port in its command line — the uv-python launcher carries `hindsight-api.exe` in its arguments,
+    the outer `uv.exe` and `uvx.exe` carry `hindsight-api@0.9.2` — so a chain member must now have a
+    name the daemon uses **and** a command line that says so.
+  - A process failing it stops the walk and is reported with its pid, image, path and the reason,
+    rather than being killed for standing near the daemon.
+  - `killDaemonTree` grew a `dryRun`. A function that kills processes has to be able to answer
+    "which ones, and why" without killing them, and that is also the only way to test this against a
+    machine that needs its daemon.
+  - `stop` no longer collapses the two outcomes into one string. A refusal used to be reported as
+    `service is still running and no collectable process was found`, which hides the only sentence
+    that would tell a person what to do next; it now reports the refusal, the image and the path.
+  - Verified both directions against the live machine: the real five-process chain is accepted
+    (pids 5756 -> 9772 -> 13608 -> 2516 -> 13816, the same chain identified by hand beforehand), and
+    a foreign port owner — this host's own DSH process, a `node.exe` on 3080 — is refused with its
+    path and reason while remaining alive.
+
 - **Command lines are redacted before they are written.** The recorder stores every process's full
   command line, because a command line is often the only thing that distinguishes an expected
   process from an unexpected one -- and for exactly the same reason it is where secrets travel.

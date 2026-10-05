@@ -1088,6 +1088,54 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('every advertised tool can actually be called and says something', bad.length === 0, bad.join(' | '))
 }
 
+// ── the daemon collector identifies the daemon, not just a name ─
+// Name alone was the whole test: any python.exe from anywhere counted. The anchor is only
+// "something is listening on 9077", so a process that merely shared a name could be killed for
+// standing near the daemon. The real chain was measured rather than assumed, and every member names
+// either the daemon or the port in its command line, so that is now the second condition.
+//
+// Nothing here actually stops anything. killDaemonTree grew a dryRun for exactly this reason: a
+// function that kills processes has to be able to answer "which ones, and why" without killing
+// them, and that is also what makes it testable on a machine that needs its daemon.
+{
+  section('daemon collector identifies the daemon')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  // Port 1 is not held by anything, so this exercises the empty path without touching the machine.
+  const none = await g.killDaemonTree({ ...ctx, port: 1 }, { dryRun: true })
+  ok('a port nobody holds collects nothing', none.ok && none.killed.length === 0, JSON.stringify(none.detail))
+
+  // The DSH host itself, if the suite is run from inside one: a node.exe on its own port. It must
+  // be declined, and it must still be alive afterwards -- which is also a check on the test.
+  const foreignPort = 3080
+  const foreign = await g.killDaemonTree({ ...ctx, port: foreignPort }, { dryRun: true })
+  if (foreign.killed.length === 0 && foreign.refused.length > 0) {
+    ok('a process that is not the daemon is refused', foreign.ok === false, JSON.stringify(foreign.detail))
+    ok('the refusal carries the reason, not just a verdict',
+      typeof foreign.refused[0].why === 'string' && foreign.refused[0].why.length > 10 && !!foreign.refused[0].exe,
+      JSON.stringify(foreign.refused[0]))
+    ok('a refused process is reported as refused rather than as nothing found',
+      /refused to kill/.test(foreign.detail) && !/no collectable/.test(foreign.detail), foreign.detail)
+  } else {
+    // Port 3080 is free on this host, so the interesting case cannot be staged here. Saying so is
+    // better than a green tick that measured nothing.
+    ok('a foreign port owner could not be staged on this host (skipped honestly)',
+      foreign.killed.length === 0, JSON.stringify(foreign))
+  }
+
+  // The two conditions are independent, and both are required. Asserted on the source, because the
+  // decision is made in PowerShell and staging a fake daemon chain is not something a test should
+  // do to a live machine.
+  const src = readFileSync(join(projectDir, 'lib', 'core.mjs'), 'utf8')
+  ok('the collector still checks the image name',
+    /\$allowed -notcontains \$name/.test(src), 'the name check was dropped')
+  ok('the collector also requires the command line to name the daemon or the port',
+    /-notmatch 'hindsight'/.test(src) && /-notmatch \$port/.test(src), 'the command-line check was dropped')
+  ok('the collector still walks upward only, never into descendants',
+    !/ParentProcessId\)\s*\}\s*#.*descend/.test(src) && /ParentProcessId/.test(src), 'the walk changed shape')
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

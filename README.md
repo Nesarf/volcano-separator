@@ -180,6 +180,15 @@ Failed to stop daemon
 process tree**. Without that layer, one plugin-spawned daemon would make the supervisor permanently
 unable to stop it.
 
+Collecting a process tree is the most destructive thing here, so the identity check is not "the
+image is called python.exe". That matches a python from anywhere, and the anchor is only "something
+is listening on 9077" — which is not by itself proof of what it is. A chain member has to be a name
+the daemon uses **and** name the daemon or the port in its command line, which every member of the
+real chain does. Anything else stops the walk and is reported with its path and the reason:
+`refused to kill pid 5136 (node.exe): image name 'node.exe' is not one of the daemon's`. A refusal
+is reported as a refusal, never as "no collectable process was found" — those mean different things
+and only one of them tells you what to do next.
+
 **3. "The port answers" is not the same as "it works".**
 A daemon can keep `/health` green while being unable to reach its database. Observed in the wild: a
 saturated disk made the daemon's Postgres connection handshake time out 48 times, the port never
