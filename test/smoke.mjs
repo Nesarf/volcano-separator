@@ -2001,6 +2001,55 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(dir, { recursive: true, force: true })
 }
 
+// ── a socket that accepts connections is not a database that works ─
+// 5432 LISTEN plus a data directory plus a failed SQL handshake is a state that exists: recovery
+// mode, a full connection table, a revoked role, a wrong password. All of them are invisible to a
+// socket probe, and the daemon then comes up answering 503 -- which reads as a daemon fault and is
+// not one. The probe now says how far it got, so a failure names the layer that failed.
+{
+  section('database query probe')
+  const d = await import('../lib/database.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  if (process.platform !== 'win32') {
+    ok('the database query probe is Windows-only (skipped honestly)', true, '')
+  } else {
+    ok('psql is found by discovery, not by a hardcoded version', typeof d.psqlPath() === 'string' && d.psqlPath().includes('psql'), String(d.psqlPath()))
+    ok('the connection url is read from the profile rather than reconstructed',
+      typeof d.databaseUrl(ctx) === 'string' && /^postgres/.test(d.databaseUrl(ctx)), String(d.databaseUrl(ctx)).replace(/:[^:@]+@/, ':<redacted>@'))
+
+    const live = await d.probeDatabaseQuery(ctx)
+    ok('a working database answers a real query', live.ok === true && live.level === 'query', JSON.stringify(live.detail))
+    ok('and the result carries no credential',
+      !JSON.stringify(live).includes('hindsight:hindsight'), 'the password reached the result')
+
+    // The failure this exists for: reachable, and unusable. Simulated with a wrong password, which is
+    // one of the four situations a socket probe cannot tell apart.
+    const { join } = await import('node:path')
+    const { homedir } = await import('node:os')
+    const f = join(homedir(), '.hindsight', 'profiles', 'vsep-probe-test.env')
+    writeFileSync(f, 'HINDSIGHT_API_DATABASE_URL=postgresql://hindsight:wrongpassword@127.0.0.1:5432/hindsight\n')
+    try {
+      const bad = await d.probeDatabaseQuery({ ...ctx, profile: 'vsep-probe-test' })
+      ok('a database that refuses the query is reported as refused, not as listening',
+        bad.ok === false && bad.checked === true && bad.level === 'query', JSON.stringify(bad.detail))
+      ok('and the reason is legible rather than the console code page decoded as UTF-8',
+        !bad.detail.includes(String.fromCharCode(0xfffd)), bad.detail)
+      ok('and the wrong password did not reach the result',
+        !JSON.stringify(bad).includes('wrongpassword'), 'the password reached the result')
+    } finally {
+      rmSync(f, { force: true })
+    }
+
+    // A profile with no url is a different answer again: not "the database is broken" but "we could
+    // not ask". Reporting those the same way would be the failure this whole layer exists to prevent.
+    const none = await d.probeDatabaseQuery({ ...ctx, profile: 'no-such-profile-xyz' })
+    ok('a missing connection url says it could not ask, rather than reporting a failure',
+      none.ok === false && none.checked === false && none.level === 'no-credentials', JSON.stringify(none.detail))
+  }
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

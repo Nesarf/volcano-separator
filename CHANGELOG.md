@@ -96,6 +96,29 @@
   malformed JSON rather than returning null, which its name invites callers to assume. Found by the
   lock module throwing on a truncated lock file.
 
+### Fixed
+
+- **The database probe now asks the database a question.** It reported a socket that accepts
+  connections plus a data directory that exists, and `5432 LISTEN` plus a data directory plus a
+  failed SQL handshake is a state that exists: recovery mode, a full connection table, a revoked
+  role, a wrong password. All four are invisible to a socket probe, and the daemon then comes up
+  answering 503 -- which reads as a daemon fault and is not one.
+  - The probe reports **how far it got** (`socket` / `data-dir` / `query`) so a failure names the
+    layer that failed rather than one word for four situations.
+  - `pg_isready` is deliberately not used even though it is the tool built for the job: it reports
+    that the server accepts connections, which is one of the four things that can be wrong. It also
+    costs the same as the real query here -- measured at 110-210 ms against `SELECT 1`'s 145-190 ms,
+    with `status` at about 1390 ms total.
+  - The credentials never leave the module: the URL carries a password, so every message passes
+    through this project's own `redactCommandLine` and the raw value is not returned at all.
+  - **A psql message that cannot be read is reported as unreadable rather than printed as damage.**
+    Its diagnostics arrive in the console code page (cp936 here) and Node decodes them into
+    replacement characters, so the reason came out as `psql: ����: ...`. That is the same failure the
+    antivirus engine names had -- a scrambled answer to *what is wrong* is still a wrong answer -- so
+    the probe says so and falls back to the exit code, which is always legible.
+  - `psql` is found by discovery under the pg0 installation rather than a hardcoded version, because
+    a machine that upgrades keeps both.
+
 ### Security
 
 - **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known
