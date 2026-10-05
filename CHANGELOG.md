@@ -52,6 +52,20 @@
   - Known gap: the in-use check and the delete are not atomic, so a process that starts using an
     entry in between is not protected. Deleting to a quarantine name first would close it.
 
+### Changed
+
+- **`status` is read-only by default; `--deep` is what measures warmth.** Measuring the uv env
+  means running `uvx --with pg0-embedded hindsight-embed@<v> --help`, and uvx builds an ephemeral
+  environment in order to run anything at all -- so a status call against a cache with no matching
+  environment *creates* one. `status` is the command run most often, by hand and by agents, on the
+  understanding that looking changes nothing; it was also feeding itself, because those generated
+  environments are the ~5 GB of idle uvx environments `cache --prune` exists to remove.
+  - `status --json` now reports `envMeasured`, and `env` is `null` rather than a fabricated
+    default, so a caller can tell "not measured" from "cold". Warmth was never part of the chain's
+    health, so leaving it unmeasured does not make anything look unhealthy.
+  - The MCP `volcano_status` tool gained an optional `deep` input, defaulting to false, and its
+    description says plainly that the flag is not read-only.
+
 ### Fixed
 
 - **The signal layer's two ephemeral rules cannot fire on this machine.** `analyzeSignals` and

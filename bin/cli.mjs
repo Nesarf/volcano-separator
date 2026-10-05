@@ -77,7 +77,9 @@ const HELP = `volcano-separator -- keeps uv / daemon / hindsight from being one 
 Usage: volcano-separator <command> [options]
 
 Commands:
-  status             whole-chain check (uv / env warmth / daemon / database / watchdog task)
+  status [--deep]    whole-chain check (uv / daemon / database / watchdog task).
+                     Warmth is left unmeasured unless --deep: the uvx dry run that measures it
+                     creates a uvx environment, so plain status is safe to run freely.
   heal               intelligent repair: warm -> serve -> watch.
                      A single TCP probe when healthy, so it is nearly free to run often.
   warm [--force]     warm the uv env only. **No watchdog**: it may take minutes.
@@ -153,7 +155,7 @@ async function main() {
 
   switch (cmd) {
     case 'status': {
-      const s = await g.status(ctx)
+      const s = await g.status(ctx, { deep: opts.deep === true })
       const svc = await g.serviceState(ctx)
       if (opts.json) return emit({ ...s, service: svc })
       console.log(s.text)

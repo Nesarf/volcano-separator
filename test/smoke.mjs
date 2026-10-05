@@ -12,7 +12,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
-import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -862,6 +862,32 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     ok('redact: the two implementations agree with each other',
       diverged.length === 0, diverged.join(' | '))
   }
+}
+
+// ── status is cheap unless asked ─
+// Measuring uv warmth runs `uvx --with ... --help`, and uvx builds an ephemeral environment to run
+// anything at all -- so a status call against a cache with no matching environment CREATES one.
+// status is the command run most often, by hand and by agents, on the understanding that looking
+// changes nothing, and it was feeding the very cache bloat `cache --prune` removes. So the warmth
+// probe is behind --deep, and this pins that it stays there.
+{
+  section('status is read-only by default')
+  const r = spawnSync(process.execPath, [cli, '--json', 'status'], { encoding: 'utf8', timeout: 180000 })
+  let d = null
+  try { d = JSON.parse(r.stdout) } catch { d = null }
+  ok('status --json parses', d !== null, (r.stdout || '').slice(0, 100))
+  if (d) {
+    ok('status reports the uv probe was not run', d.envMeasured === false, `envMeasured=${d.envMeasured}`)
+    ok('status leaves env null rather than inventing a default', d.env === null, JSON.stringify(d.env))
+    // Not measured must not read as unhealthy: the chain's health never included warmth.
+    ok('an unmeasured warmth does not make the chain unhealthy', typeof d.ok === 'boolean' && !!d.uv && !!d.daemon)
+  }
+  // The MCP surface must be read-only for the same reason -- an agent calling a status tool should
+  // not be able to grow the cache. Asserted on the schema, since the schema is the contract.
+  const mcpSrc = readFileSync(join(projectDir, 'lib', 'mcp.mjs'), 'utf8')
+  ok('the MCP status tool documents its deep flag as not read-only',
+    /deep[\s\S]{0,400}NOT read-only/.test(mcpSrc), 'the deep property lost its warning')
+  ok('the MCP status tool still defaults to no deep', /args\.deep === true/.test(mcpSrc), 'deep stopped being opt-in')
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
