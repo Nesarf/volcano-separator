@@ -24,6 +24,7 @@ import { dirname, join, resolve } from 'node:path'
 import * as g from '../lib/core.mjs'
 import * as res from '../lib/resources.mjs'
 import * as uvc from '../lib/uvcache.mjs'
+import * as enf from '../lib/enforce.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -98,6 +99,12 @@ Commands:
   reveal chain <pid>                              inherited chain, recovered from history
   policy [show|allow <e>|deny <e>|mode <m>]        what stealth is permitted, and what happens to the rest
   detain <pid> [--reason "..."] [--no-suspend]     freeze it, force its windows open, open a custody window
+  isolate <path|pid> [--dry-run] [--include-system-root]
+                     deny a file the right to execute, reversibly. Prints the icacls command that
+                     undoes it, which works even if this tool is gone. A lock on a file does not
+                     reach into a process already running from it -- use detain for those.
+  restore <journal>  put an isolated file's original ACL back
+  isolated           what this tool has isolated and not undone
   release <pid>                                   resume a detained process
   detained [--no-probe] [--no-scan]               what is under custody now, checked against the
                                                   live system, plus anything frozen with no
@@ -503,6 +510,51 @@ async function main() {
       console.log(`  stealth findings on record: ${st.total}`)
       for (const e of st.events.slice(-10)) {
         console.log(`     ${String(e.t).replace('T', ' ').slice(0, 19)}  ${String(e.action ?? 'observed').padEnd(9)} ${e.name} pid=${e.pid} ${C.dim(String(e.why ?? '').slice(0, 70))}`)
+      }
+      break
+    }
+
+    case 'isolate': {
+      const target = opts._[1] ?? ''
+      const asPid = Number(target)
+      const r = await enf.isolate(ctx, {
+        path: Number.isFinite(asPid) && asPid > 0 ? '' : target,
+        pid: Number.isFinite(asPid) && asPid > 0 ? asPid : 0,
+        dryRun: opts.dryRun === true,
+        includeSystemRoot: opts['include-system-root'] === true,
+      })
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red('FAIL') + ' isolate: ' + r.detail); process.exit(1) }
+      if (r.dryRun) { console.log(`${C.yellow('dry-run')} would deny execute on ${r.path}`); break }
+      if (r.alreadyIsolated) { console.log(`${C.green('ok')} already isolated: ${r.path}`); break }
+      console.log(`${C.green('ok')} execute denied on ${r.path}`)
+      console.log(`  backup      ${r.backupFile}`)
+      if (r.stillRunning) console.log(`  ${C.yellow('note')}        ${r.note}`)
+      console.log('')
+      console.log('  undo without this tool, even if it is gone:')
+      console.log(`    ${r.restoreCommand}`)
+      console.log(C.dim('  or: volcano-separator restore ' + r.journalFile))
+      break
+    }
+
+    case 'restore': {
+      const j = opts._[1] ?? ''
+      const r = await enf.restoreIsolation(ctx, { journal: j })
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red('FAIL') + ' restore: ' + r.detail); process.exit(1) }
+      console.log(`${C.green('ok')} ${r.detail}`)
+      console.log(`  ${r.path}`)
+      break
+    }
+
+    case 'isolated': {
+      const l = enf.isolatedFiles(ctx)
+      if (opts.json) return emit(l)
+      console.log(`isolation journals: ${l.dir}`)
+      if (!l.entries.length) { console.log(C.dim('  (none)')); break }
+      for (const e of l.entries) {
+        console.log(`  ${String(e.state ?? '?').padEnd(10)} ${e.path}`)
+        console.log(C.dim(`             ${e.journal}`))
       }
       break
     }

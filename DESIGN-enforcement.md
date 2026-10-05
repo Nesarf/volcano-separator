@@ -1,7 +1,7 @@
 # Enforcement: isolation and in-place encryption
 
-**Status: design only. Nothing here is implemented, and this was written before the code on
-purpose.**
+**Status: stage 1 built (`isolate` / `restore` / `isolated`). Stages 0, 2 and 3 are not, and the
+decisions below are recorded but not yet acted on.**
 
 The tool today records, names and asks. It cannot prevent anything. That gap is real and it is the
 last thing standing between what this is and what it was meant to be. It is also the half where a
@@ -171,18 +171,25 @@ than as mitigation.
 
 ## 7. The never-list
 
-Actions are refused, not warned about, for:
+Refused, not warned about. What the implementation actually enforces today:
 
-- anything under `%SystemRoot%`, `%ProgramFiles%`, or the Windows installer store
-- the running Hindsight daemon, its database, or anything this tool started
-- anything this tool is currently executing from, including its own bash and PowerShell children
-- files that are not regular files — no devices, no reparse points, no directories
-- anything the user has allowlisted, at any depth
-- **the undo path itself.** Nothing may act on the journal, the key store, or the policy file. An
-  enforcement mechanism that can disable its own reversal is not reversible.
+| Refused | Why |
+|---|---|
+| anything inside `%SystemRoot%` | a bad ACL on something Windows loads can cost the boot, and the machine may only be recoverable from outside it. `-IncludeSystemRoot` says you mean it. |
+| the installer package cache | same shape of risk, and nothing legitimate needs it |
+| **the isolation journal** | nothing may act on the undo path. A mechanism that can disable its own reversal is not reversible, and this rule holds even when a caller insists. |
+| **this tool's own directory** | it has to be able to undo its own work |
+| anything that is not a regular file | no devices, no directories, no reparse points |
+| anything without a stated target | a lock with no subject is a guess |
 
----
+**`%ProgramFiles%` is not on the list.** That is the decision above: service binaries and installed
+applications are ordinary targets, and breaking one is restorable in a way that breaking the boot
+is not.
 
+Earlier drafts also listed the running Hindsight daemon and its database. They are not enforced
+separately because they do not need to be: the daemon runs from the uv cache and the database from
+a pg0 instance, and neither is a target anyone has a reason to name. Adding a rule for a case that
+cannot arise makes the list harder to trust, not safer.
 ## 8. Staged rollout
 
 Each stage ships on its own and is used before the next is written.
@@ -192,9 +199,10 @@ heartbeat reports when a rule *would* have acted, had `policy.mode` been anythin
 and does nothing. This costs
 nothing to build and produces the data every later decision depends on.
 
-**Stage 1 — a second enforcement path, still manual.** `isolate <pid>` and `encrypt <pid>` as
-commands a human types, with the journal and the undo, and no automatic caller. This is how the
-undo path gets exercised on real files before anything depends on it.
+**Stage 1 — a second enforcement path, still manual. BUILT, for isolation only.** `isolate <path|pid>`,
+`restore <journal>` and `isolated`, each typed by a human, with the journal and the undo, and no
+automatic caller. `encrypt` is not built. The undo path has been exercised on real files, which is
+what this stage exists for.
 
 **Stage 2 — an action becomes reachable per rule.** After the gate in 4.2, and for one rule at a
 time, `policy.mode` may be set to something other than `observe`.
@@ -204,24 +212,39 @@ unattended. The current answer is no, and stage 0 may well show it should stay n
 
 ---
 
-## 9. Open questions
+## 9. Decisions taken (2026-10-05)
 
-These are the user's to answer, not mine to assume.
+The four questions this section used to ask have answers, and they are recorded here because the
+code that follows is shaped by them.
 
-1. **ACL isolation or encryption first?** My answer is isolation: it is reversible by anyone, it does
-   not depend on a key surviving, and it does not risk a file. Encryption's advantage is that it
-   stops a rename-and-relaunch, which an ACL does not.
-2. **Where does the key live?** A file next to the journal is honest and weak. DPAPI ties it to the
-   machine and the user. A passphrase means a human is present when it matters and is absent when it
-   does not. Each of these is a different product.
-3. **What is the intended target?** If it is "software that relaunches itself", ACL isolation is
-   sufficient and encryption is overkill. If it is "a thing I do not want to be able to run at all,
-   even by me", that is encryption, and it needs the passphrase answer first.
-4. **May any mode other than `observe` ever be set unattended?** Everything in this document works
-   with the answer "no".
+| Question | Decision | Consequence |
+|---|---|---|
+| Which capability first? | **ACL isolation** | built; encryption remains unbuilt |
+| Where does the key live? | **bound to the machine and the user** (DPAPI) | applies to the journal today, and to encryption when it exists |
+| What is the intended target? | **as system-level as possible** | `%ProgramFiles%` and service binaries are reachable; `%SystemRoot%` needs an explicit acknowledgement |
+| Is any non-`observe` mode ever unattended? | **deferred** | nothing reads `policy.mode` yet, and that stays true |
 
----
+### What "system-level" changed, and what it did not
 
+It widened the reach rather than lowering the guard. `%ProgramFiles%`, service binaries and the
+files that Run keys and scheduled tasks point at are now ordinary targets. **`%SystemRoot%` still
+refuses by default**, and needs `-IncludeSystemRoot` to mean it, because a bad ACL on something
+Windows itself loads can cost the boot -- and the machine may then only be recoverable from outside
+it. That is a different kind of failure from breaking an application, and it earns a different
+kind of confirmation.
+
+Three protections were added because system-level reach is what makes them necessary:
+
+1. **The undo must not depend on this tool.** The backup is written with `icacls /save` and restored
+   with `icacls /restore`, and every result prints the exact command. If volcano-separator is
+   deleted, broken, or the machine only boots to a recovery prompt, the restore still works.
+2. **The undo journal must not live anywhere prunable.** It sits beside the policy, not under the
+   cache, because a cache is something a person is invited to clean and a cleaned undo is not an
+   undo.
+3. **The journal must be tamper-evident.** Otherwise "restore the original ACL" is itself a
+   privilege-escalation primitive: forge a journal and the tool will happily apply it. This is where
+   the machine-and-user-bound key belongs, and it is **not yet built** -- today the journals are
+   plaintext, which is the most important thing left undone in this document.
 ## 10. What I would build first
 
 **Stage 0, and nothing else.** It is small, it is safe, it produces the evidence that every later

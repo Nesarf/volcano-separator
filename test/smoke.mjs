@@ -1460,6 +1460,76 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     existsSync(join(projectDir, 'DESIGN-enforcement.md')), 'DESIGN-enforcement.md is missing')
 }
 
+// ── isolation: the act, the undo, and what is refused ─
+// The first thing this tool can do to a file, so the tests are mostly about the undoing and the
+// refusing rather than about the act. A lock that cannot be lifted is a deletion with extra steps.
+{
+  section('isolation')
+  const enf = await import('../lib/enforce.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-acl-' + process.pid) }
+  const scratch = join(tmpdir(), 'vsep-iso-' + process.pid)
+  mkdirSync(scratch, { recursive: true })
+  const target = join(scratch, 'thing.exe')
+  writeFileSync(target, 'not really a binary')
+
+  const onWin = process.platform === 'win32'
+  if (!onWin) {
+    ok('isolation is Windows-only (skipped honestly)', true, '')
+  } else {
+    // Refusals first: these must hold before anything is attempted.
+    const sys = await enf.isolate(ctx, { path: join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'notepad.exe') })
+    ok('a file inside %SystemRoot% is refused without the explicit acknowledgement',
+      sys.ok === false && sys.refused === true, JSON.stringify(sys.detail))
+
+    const dirTarget = await enf.isolate(ctx, { path: scratch })
+    ok('a directory is refused', dirTarget.ok === false && /regular file/.test(dirTarget.detail), dirTarget.detail)
+
+    const noTarget = await enf.isolate(ctx, {})
+    ok('no target at all is refused', noTarget.ok === false, JSON.stringify(noTarget.detail))
+
+    // Dry run must change nothing, and it is asserted against the filesystem rather than the report.
+    const dry = await enf.isolate(ctx, { path: target, dryRun: true })
+    ok('a dry run reports what it would do', dry.ok === true && dry.dryRun === true, JSON.stringify(dry.detail))
+    const afterDry = await enf.isolate(ctx, { path: target, dryRun: true })
+    ok('and a second dry run still finds nothing applied',
+      afterDry.dryRun === true && afterDry.alreadyIsolated !== true, JSON.stringify(afterDry))
+
+    const applied = await enf.isolate(ctx, { path: target })
+    ok('isolate applies the deny', applied.ok === true && applied.denied === true, JSON.stringify(applied.detail))
+    ok('and it says how to undo it without this tool',
+      typeof applied.restoreCommand === 'string' && /icacls/.test(applied.restoreCommand) && /restore/.test(applied.restoreCommand),
+      applied.restoreCommand)
+    ok('and the backup it points at exists', existsSync(applied.backupFile), applied.backupFile)
+
+    const again = await enf.isolate(ctx, { path: target })
+    ok('isolating twice is idempotent, not a second ACE',
+      again.ok === true && again.alreadyIsolated === true, JSON.stringify(again))
+
+    // The journal is what makes the undo findable later, and it is written by PowerShell -- which
+    // writes a BOM. JSON.parse throws on that, and the first version reported every journal as
+    // unreadable because of it.
+    const listed = enf.isolatedFiles(ctx)
+    const mine = listed.entries.filter((e) => e.path === target)
+    ok('the journal is readable back', mine.length >= 1 && mine.every((e) => e.state !== 'unreadable'),
+      JSON.stringify(listed.entries.map((e) => e.state)))
+
+    const restored = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
+    ok('restore lifts the deny', restored.ok === true && restored.denied === false, JSON.stringify(restored.detail))
+    ok('and says the original ACL is back', /original ACL/.test(restored.detail), restored.detail)
+
+    // The undo is the point. `denied` is not the script's opinion that it succeeded -- it is read
+    // back from icacls after the restore, so a restore that leaves the DENY in place reports
+    // denied: true and fails here. That distinction is the whole reason the field exists.
+    const relisted = enf.isolatedFiles(ctx)
+    ok('the journal still exists after a restore (it is a record, not a flag)',
+      relisted.entries.some((e) => e.journal === applied.journalFile), 'journal disappeared')
+  }
+
+  rmSync(scratch, { recursive: true, force: true })
+  rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

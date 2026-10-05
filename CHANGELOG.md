@@ -4,6 +4,24 @@
 
 ### Added
 
+- **`isolate` / `restore` / `isolated` -- the first thing this tool can do to a file, and its undo.**
+  `isolate <path|pid>` adds one DENY ACE that stops a file being launched again. It is a door lock,
+  not a security boundary, and it says so: it does not stop a process already running (that is
+  `detain`), a copy, a rename, or anyone with administrative rights.
+  - **The undo does not depend on this tool.** The ACL is saved with `icacls /save` and restored
+    with `icacls /restore`, and every result prints the exact command. If volcano-separator is
+    deleted, broken, or the machine only boots to a recovery prompt, the restore still works.
+  - **The journal is not in the cache directory.** A cache is something a person is invited to
+    clean, and a cleaned undo is not an undo. It lives beside the policy.
+  - **Refused, not warned about:** anything inside `%SystemRoot%` (unless `-IncludeSystemRoot` says
+    you mean it), the installer package cache, the isolation journal itself, this tool's own
+    directory, and anything that is not a regular file. `%ProgramFiles%` and service binaries are
+    ordinary targets -- breaking one is restorable in a way that breaking the boot is not.
+  - The rejections are the point, so most of the checks are about them and about the undo rather
+    than about the act.
+
+### Security
+
 - **The MCP surface went from 3 tools to 13, and is read-only apart from `heal`.** The observation
   and incident-response layers were reachable from the CLI and from nothing else, so a harness
   could ask whether the service was up and could not ask what the machine had been doing. Now
