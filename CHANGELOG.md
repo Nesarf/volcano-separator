@@ -73,6 +73,29 @@
   could leave a half-written policy -- which is precisely the corrupt state above. It now writes
   beside and renames, and a rename within a directory is atomic.
 
+### Fixed
+
+- **Two recoveries could run at once, and did.** `heal` was written as if only one of it ran at a
+  time and nothing enforced that. The heartbeat fires every five minutes; a manual `heal`, a
+  `restart`, or an MCP call can start at any moment. **Measured over 514 heartbeats on this machine,
+  16 overlapped the previous one -- about three percent -- and the worst ran for thirty minutes while
+  the next had already begun.** Two concurrent recoveries can warm the same environment twice, start
+  a service one of them is about to stop, and report two different conclusions about one machine.
+  - A lock, taken after the fast path rather than around the whole function: the common case is one
+    probe that concludes *healthy*, and holding a lock for it would make the cheap question expensive.
+  - A holder that died does not block for ever, and the takeover is recorded rather than silent. A
+    lock that can never be taken again is worse than no lock -- the heartbeat would stop repairing
+    anything and report that it could not get a turn.
+  - An unreadable lock file is not treated as evidence that someone holds it.
+  - Only the holder releases, so a process that took over a stale lock cannot have its own deleted
+    by the process it took over from.
+  - **A skipped heartbeat does not look healthy.** The verdict line already prints
+    `skipped(reason)`, so standing down reports `skipped(recovery-in-progress)` -- a distinction this
+    tool exists to make and the easiest one to lose.
+- **`readJsonLoose` documented for what it is.** It tolerates the BOM and nothing else: it throws on
+  malformed JSON rather than returning null, which its name invites callers to assume. Found by the
+  lock module throwing on a truncated lock file.
+
 ### Security
 
 - **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known

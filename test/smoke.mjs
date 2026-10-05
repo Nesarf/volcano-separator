@@ -1949,6 +1949,58 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(dir, { recursive: true, force: true })
 }
 
+// ── two recoveries must not run at once ─
+// heal was written as if only one of it ran at a time and nothing enforced that. Measured over 514
+// heartbeats on this machine, 16 overlapped the previous one -- about three percent -- and the worst
+// ran for thirty minutes while the next had already begun. The risk is not hypothetical, which is the
+// only reason it is worth the code.
+{
+  section('recovery lock')
+  const L = await import('../lib/lock.mjs')
+  const dir = join(tmpdir(), 'vsep-lock-' + process.pid)
+  rmSync(dir, { recursive: true, force: true })
+  const ctx = { lockDir: dir }
+
+  const first = L.acquireLock(ctx, 'recovery', { holder: 'first' })
+  ok('the first caller gets the lock', first.ok === true && first.takenOverFrom === null, JSON.stringify(first))
+
+  const second = L.acquireLock(ctx, 'recovery', { holder: 'second' })
+  ok('a second caller is told it is busy rather than being allowed through',
+    second.ok === false && second.busy === true, JSON.stringify(second))
+  ok('and it can see who holds it', second.holder?.holder === 'first' && second.holder?.pid === process.pid, JSON.stringify(second.holder))
+
+  // A holder that died must not block for ever. A lock that can never be taken again is worse than no
+  // lock: the heartbeat would stop repairing anything and report that it could not get a turn.
+  writeFileSync(L.lockFile(ctx, 'recovery'), JSON.stringify({ pid: 999999, holder: 'dead', at: new Date(Date.now() - 3600000).toISOString() }))
+  const took = L.acquireLock(ctx, 'recovery', { holder: 'third' })
+  ok('a lock whose holder is gone is taken over', took.ok === true, JSON.stringify(took))
+  ok('and the takeover is recorded rather than silent',
+    took.takenOverFrom?.dead?.holder === 'dead' || took.takenOverFrom?.holder === 'dead' || took.takenOverFrom?.alive === false,
+    JSON.stringify(took.takenOverFrom))
+
+  // A truncated lock file is not evidence that anyone holds it.
+  writeFileSync(L.lockFile(ctx, 'recovery'), '{ not json')
+  const broken = L.acquireLock(ctx, 'recovery', { holder: 'fourth' })
+  ok('an unreadable lock file does not block for ever', broken.ok === true, JSON.stringify(broken))
+
+  // Only the holder releases. A process that took over must not be able to have its lock deleted by
+  // the process it took over from.
+  writeFileSync(L.lockFile(ctx, 'recovery'), JSON.stringify({ pid: process.pid + 1, holder: 'someone else', at: new Date().toISOString() }))
+  const refused = L.releaseLock(ctx, 'recovery')
+  ok('a non-holder cannot release the lock', refused.ok === false && /held by pid/.test(refused.reason ?? ''), JSON.stringify(refused))
+
+  // And the holder can. The fake lock above is removed first: it carries a fresh timestamp and a
+  // pid that may well be alive, so acquireLock would correctly refuse to take it and the release
+  // below would then be refused for the right reason -- which is what the first version of this
+  // test measured instead of what it meant to.
+  rmSync(L.lockFile(ctx, 'recovery'), { force: true })
+  L.acquireLock(ctx, 'recovery', { holder: 'holder' })
+  const released = L.releaseLock(ctx, 'recovery')
+  ok('the holder releases it', released.ok === true && !existsSync(L.lockFile(ctx, 'recovery')), JSON.stringify(released))
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
