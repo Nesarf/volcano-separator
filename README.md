@@ -229,9 +229,12 @@ operation, where scanning running processes and then deleting is not.
   rewrite or delete the target. A suspension is persistent and loud, because a suspension nobody
   comes back for is worse than one that was never applied.
 - **Detection does not act.** `signals` reports and `decide` says what it *would* do; the mode
-  defaults to `observe` and nothing enforces. An enforcement path would first need a measured
-  false-positive rate, and the detectors have to be shown to fire at all before that number means
-  anything.
+  defaults to `observe` and nothing enforces. `policy mode suspend` and `policy mode reject` are
+  accepted and **implemented nowhere** — the command says so when you set one, because a setting that
+  promises an action the tool cannot take is the kind of false signal this project exists to remove.
+  An enforcement path would first need a measured false-positive rate, and the detectors have to be
+  shown to fire at all before that number means anything. The design for changing this, and the
+  sequence it would have to follow, is in [`DESIGN-enforcement.md`](DESIGN-enforcement.md).
 - **It does not patch the host plugin.** The plugin's `ensureDaemon()` starts with
   `if (await isServerHealthy(...)) return;` — once the service is healthy it returns immediately and
   the fragile path is never entered. That is "no longer traversed", not "patched".

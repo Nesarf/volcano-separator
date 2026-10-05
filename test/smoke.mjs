@@ -1436,6 +1436,30 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   }
 }
 
+// ── the tool must not promise an action it cannot take ─
+// `policy mode reject` printed "(unpermitted stealth will be TERMINATED)". Nothing in this tool
+// terminates anything: `suspend` and `reject` are accepted by the CLI and implemented nowhere, so a
+// user could set a mode, be told their unpermitted stealth would be terminated, and have nothing
+// happen. That is the exact failure this project exists to remove -- a signal that does not mean
+// what it says -- committed by the tool itself, in the one place a user is most likely to believe it.
+{
+  section('policy mode honesty')
+  const r = spawnSync(process.execPath, [cli, 'policy', 'mode', 'reject'], { encoding: 'utf8', timeout: 60000 })
+  const out = (r.stdout ?? '') + (r.stderr ?? '')
+  ok('setting a mode succeeds or fails cleanly', r.status === 0 || r.status === 1, `status=${r.status}`)
+  ok('the output does not claim a termination this tool cannot perform',
+    !/TERMINAT/i.test(out), out.trim().slice(0, 120))
+  ok('and it says what actually happens instead',
+    /nothing acts on this mode/i.test(out) || r.status !== 0, out.trim().slice(0, 120))
+  // Leave the user's policy as it was: the default is observe, and a test must not change it.
+  spawnSync(process.execPath, [cli, 'policy', 'mode', 'observe'], { encoding: 'utf8', timeout: 60000 })
+
+  // The design document is the reason the message points somewhere. If it is renamed or deleted the
+  // message becomes a dead end, so the link is checked.
+  ok('the caveat points at a document that exists',
+    existsSync(join(projectDir, 'DESIGN-enforcement.md')), 'DESIGN-enforcement.md is missing')
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

@@ -471,7 +471,12 @@ async function main() {
         }
         pol.mode = m
         const w = g.savePolicy(ctx, pol)
-        console.log(`${w.ok ? C.green('ok') : C.red('FAIL')} mode -> ${m}${m === 'reject' ? C.red('  (unpermitted stealth will be TERMINATED)') : ''}`)
+        // This used to print "(unpermitted stealth will be TERMINATED)" for reject. Nothing in this
+        // tool terminates anything: `suspend` and `reject` are accepted here and implemented nowhere,
+        // so the message promised an action the tool cannot take -- which is the exact kind of false
+        // signal this project exists to remove. It now says what actually happens.
+        const caveat = m === 'observe' ? '' : C.yellow('  (recorded; nothing acts on this mode yet -- see DESIGN-enforcement.md)')
+        console.log(`${w.ok ? C.green('ok') : C.red('FAIL')} mode -> ${m}${caveat}`)
         process.exit(w.ok ? 0 : 1)
       }
       if (sub === 'allow' || sub === 'deny') {

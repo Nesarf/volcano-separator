@@ -87,6 +87,27 @@
   - Dead code removed: `const pgReady = join(process.env.ProgramFiles, '..', '.pg0')`, which was
     never referenced and resolved to `C:\.pg0`, a path that does not exist.
 
+### Added
+
+- **[`DESIGN-enforcement.md`](DESIGN-enforcement.md)** -- the design for isolation and in-place
+  encryption, written before the code because this is the half where a mistake costs someone their
+  machine. It states what each capability actually stops (an ACL is a door lock, encryption is a
+  safe, and neither touches a process that is already running), the trigger that does not exist yet,
+  the action contract every action must satisfy, the failure modes as required behaviour rather than
+  as mitigations, and the never-list. It ends with stage 0 and nothing else: make `wouldAct`
+  something a person can see, attach nothing to it, and let the data decide whether later stages are
+  worth building.
+
+### Fixed
+
+- **`policy mode reject` claimed it would terminate things, and nothing terminates anything.**
+  `suspend` and `reject` are accepted by the CLI and implemented nowhere -- `wouldAct` is computed by
+  `decideSignals` and read by no one, and the recorder has no process-control capability at all. So a
+  user could set a mode, be told *"unpermitted stealth will be TERMINATED"*, and have nothing happen.
+  A setting that promises an action the tool cannot take is the exact failure this project exists to
+  remove, and the tool was committing it in the one place a user is most likely to believe it. The
+  message now says what actually happens and points at the design.
+
 ### Security
 
 - **The daemon collector now identifies the daemon instead of a name.** `stop`'s second level
