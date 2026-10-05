@@ -57,6 +57,30 @@
 
 ### Security
 
+- **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known
+  that since it was written -- `custodyReport` computes `pid-reused` and reports it -- but the release
+  path never consulted it. So the tool could correctly show a recycled pid on one screen and resume
+  a stranger on the next: Windows hands a number to something else, someone releases it, and an
+  unrelated process is unfrozen. `release` now refuses when the pid was reused, when the process is
+  gone, and when there is no record to check identity against -- the third because acting on an
+  identity that cannot be verified is the same act as resuming a stranger, and `isolate` and
+  `decrypt` already refuse on that principle.
+- **A failed release no longer records itself as a release.** `detain.ps1` called `NtResumeProcess`,
+  discarded the answer and wrote `action = 'released'` unconditionally, then exited 0. The record now
+  carries `release-failed` with `requested`/`succeeded`, because a record may not assert something the
+  system did not do -- and `running` in the custody report means "a release was recorded and the
+  process is still frozen", so the two ways to reach that state were a genuine bug and this line.
+- **A release could authorise itself.** `rebuildCustody` created a record for any matching event, so
+  releasing a pid that had never been detained wrote a record saying it had -- and the next release
+  found that record and proceeded. Only events that establish custody create a record now. Found
+  while adding the identity check, because the check kept passing for a pid nothing had ever detained.
+- **Dead code removed:** `LEAVE_ALONE` in `lib/uvcache.mjs` named five sub-caches with a comment
+  explaining they were not worth removing. Nothing read it, and it did not need to: the plan only
+  walks `archive-v0`, so those directories were already untouched -- by not being looked at rather
+  than by being excluded. A set with a comment explaining what it protects reads like protection.
+
+### Added
+
 - **`volcano_isolated` and `volcano_evidence` in the MCP surface** (13 tools -> 15). Both read-only.
   `isolate` and `restore` are deliberately still not exposed: an agent should not be able to change
   what can execute on this machine, and that line is not worth crossing for convenience.

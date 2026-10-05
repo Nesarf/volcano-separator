@@ -118,12 +118,35 @@ $cmd = [string]$target.CommandLine
 
 # ------------------------------------------------------------------ release
 if ($Release) {
+    # The mechanical result decides what is recorded, and it did not before.
+    #
+    # This used to call Resume, discard the answer, write `action = 'released'` unconditionally, and
+    # `exit 0` -- so a release that failed was recorded as a release that happened. That is the one
+    # thing this tool is built not to do: a record may not assert something the system did not do.
+    # `running` in the custody report means exactly "a release was recorded but the process is still
+    # frozen", and the two ways to produce that state were a genuine bug and this line.
     $ok = [Custody]::Resume($TargetPid)
-    Write-Activity @{ kind = 'detain'; action = 'released'; pid = $TargetPid; name = $name }
-    $rel = @{ ok = $ok; action = 'released'; pid = $TargetPid; name = $name }
+    $action = if ($ok) { 'released' } else { 'release-failed' }
+
+    # Recorded either way, because a failed attempt is itself something a person needs to see. What
+    # changes is the claim, not whether there is a record.
+    Write-Activity @{ kind = 'detain'; action = $action; pid = $TargetPid; name = $name; requested = $true; succeeded = [bool]$ok }
+
+    $rel = @{
+        ok             = [bool]$ok
+        action         = $action
+        requested      = $true
+        succeeded      = [bool]$ok
+        pid            = $TargetPid
+        name           = $name
+    }
+    if (-not $ok) {
+        $rel.detail = 'NtResumeProcess did not report success, so this pid may still be frozen'
+        $rel.note = 'the record says release-failed rather than released, because the record must not claim what did not happen'
+    }
     try { $rel | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $ActivityDir ("detain-$TargetPid.json")) -Encoding UTF8 } catch { }
     Write-Output ($rel | ConvertTo-Json -Compress)
-    exit 0
+    exit $(if ($ok) { 0 } else { 1 })
 }
 
 # ------------------------------------------------------------------ 1. suspend

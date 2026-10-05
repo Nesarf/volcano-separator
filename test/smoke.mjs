@@ -1855,6 +1855,49 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(base, { recursive: true, force: true })
 }
 
+// ── release must know who it is releasing ─
+// A pid is not an identity. The ledger has known that since it was written -- `custodyReport`
+// computes `pid-reused` and says so -- but the release path never consulted it, so the tool could
+// correctly report a recycled pid on one screen and resume a stranger on the next. The same fact
+// computed and never read shows up four times in this codebase; this is the one with a confused
+// deputy attached.
+{
+  section('release identity')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  if (process.platform !== 'win32') {
+    ok('release identity is Windows-only (skipped honestly)', true, '')
+  } else {
+    // A pid that does not exist: nothing to resume, and the reason must say so rather than saying
+    // "no record" -- a refusal that gives the wrong reason is barely better than no check.
+    const gone = await g.detain(ctx, { pid: 999999, release: true })
+    ok('a release for a pid that does not exist is refused', gone.ok === false && gone.refused === true, JSON.stringify(gone.detail))
+    ok('and it says the process does not exist, not that the record is missing',
+      /no process with pid/.test(gone.detail), gone.detail)
+
+    // A pid that exists but was never detained: no identity to check, which is the same shape of act.
+    const alive = await g.detain(ctx, { pid: process.pid, release: true })
+    ok('a release for a process this tool never froze is refused',
+      alive.ok === false && alive.refused === true, JSON.stringify(alive.detail))
+    ok('and refuses because there is no record to check identity against',
+      /no record of a detain/.test(alive.detail), alive.detail)
+    ok('and it says nothing was resumed', /Nothing was resumed/.test(alive.note ?? ''), String(alive.note))
+
+    // The happy path must still work: detain something real, then release it.
+    const { spawn } = await import('node:child_process')
+    const kid = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 60000)'], { stdio: 'ignore' })
+    await new Promise((r) => setTimeout(r, 800))
+    const held = await g.detain(ctx, { pid: kid.pid, custody: false, topmost: false })
+    ok('a real process can still be detained', held.ok === true, JSON.stringify(held.detail ?? held))
+    const freed = await g.detain(ctx, { pid: kid.pid, release: true })
+    ok('and released, with the identity check passing',
+      freed.ok === true && freed.succeeded === true, JSON.stringify(freed.detail ?? freed))
+    ok('the record names the action that actually happened', freed.action === 'released', String(freed.action))
+    try { kid.kill() } catch { /* it may already be gone */ }
+  }
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
