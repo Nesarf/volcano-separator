@@ -1250,35 +1250,59 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     fileURLToPath: 'node:url', createInterface: 'node:readline',
   }
 
-  // Comments and string literals go first. Without this the check reported nine modules that were
-  // fine: mcp.mjs describes itself as healing and warming, and a comment in platform.mjs names
-  // readActivity. A word in prose is not a reference.
+  // Strip comments, string literals and template literals from JS source, keeping everything else.
   //
-  // This is a character scan rather than a set of regexes, because every attempt to write those
-  // regexes here lost a backslash to one escaping layer or another -- which is the same reason the
-  // rest of this file builds its patterns from character codes.
-  const BS = String.fromCharCode(92)
-  const SQ = String.fromCharCode(39)
-  const DQ = String.fromCharCode(34)
-  const BT = String.fromCharCode(96)
-  const SLASH = String.fromCharCode(47)
-  const STAR = String.fromCharCode(42)
+  // Regex literals are the hard part and skipping them is not optional: commandline.mjs contains
+  // /... [^"\s']*/gi, whose quote characters are inside a regex, and a scanner that does not know
+  // that reads them as the start of a string and swallows the rest of the file. The first version of
+  // this did exactly that, which meant the import check quietly stopped seeing anything after that
+  // line -- it missed isSystemRoot in signals.mjs, and only the test suite caught it.
+  //
+  // A slash starts a regex when the previous significant character cannot end an expression. That is
+  // the standard heuristic and it is enough here.
   const CODE = (src) => {
+    const BS = String.fromCharCode(92)
+    const SQ = String.fromCharCode(39)
+    const DQ = String.fromCharCode(34)
+    const BT = String.fromCharCode(96)
+    const SL = String.fromCharCode(47)
+    const ST = String.fromCharCode(42)
+    const NL = String.fromCharCode(10)
+    const REGEX_OK_BEFORE = new Set('(,=:[!&|?{};+-*%~^<>'.split(''))
     let out = ''
     let i = 0
+    let prev = ''
     while (i < src.length) {
       const c = src[i]
       const n = src[i + 1]
-      if (c === SLASH && n === STAR) {
-        const e = src.indexOf(STAR + SLASH, i + 2)
+      if (c === SL && n === ST) {
+        const e = src.indexOf(ST + SL, i + 2)
         i = e === -1 ? src.length : e + 2
         out += ' '
         continue
       }
-      if (c === SLASH && n === SLASH) {
-        const e = src.indexOf(NL_SHIM, i + 2)
+      if (c === SL && n === SL) {
+        const e = src.indexOf(NL, i + 2)
         i = e === -1 ? src.length : e
         out += ' '
+        continue
+      }
+      if (c === SL && (prev === '' || REGEX_OK_BEFORE.has(prev))) {
+        // a regex literal: consume to the unescaped closing slash, then its flags
+        i++
+        let inClass = false
+        while (i < src.length) {
+          const d = src[i]
+          if (d === BS) { i += 2; continue }
+          if (d === '[') inClass = true
+          else if (d === ']') inClass = false
+          else if (d === SL && !inClass) { i++; break }
+          else if (d === NL) break
+          i++
+        }
+        while (i < src.length && /[a-z]/i.test(src[i])) i++
+        out += ' '
+        prev = 'x'
         continue
       }
       if (c === SQ || c === DQ || c === BT) {
@@ -1289,9 +1313,11 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
         }
         i++
         out += ' '
+        prev = 'x'
         continue
       }
       out += c
+      if (!/\s/.test(c)) prev = c
       i++
     }
     return out
