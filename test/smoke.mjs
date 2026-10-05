@@ -25,6 +25,15 @@ const cli = join(projectDir, 'bin', 'cli.mjs')
 // code has -- the collector checks the image name, the probe resolves offline -- and saying
 // "core.mjs contains this string" made them break the moment the code moved to another module,
 // which is a property of the file layout and not of the code.
+// Terminal colour codes sit inside the sentences these tests match on, so `would have acted 4 time`
+// does not match `would have acted <esc>4<esc> time`. Stripping them first is the difference between
+// testing the output and testing the colouring.
+// Built from character codes rather than written as a literal: an escape character, then the CSI
+// bracket, then the parameters. Every attempt to write this as a regex literal in this file has lost
+// a backslash to one escaping layer or another, which is why the import check builds its patterns
+// the same way.
+const stripAnsi = (s) => String(s).replace(new RegExp(String.fromCharCode(27) + String.fromCharCode(91) + '[0-9;]*m', 'g'), '')
+
 const libSource = () => readdirSync(join(projectDir, 'lib'))
   .filter((f) => f.endsWith('.mjs'))
   .map((f) => readFileSync(join(projectDir, 'lib', f), 'utf8'))
@@ -1447,10 +1456,15 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   const r = spawnSync(process.execPath, [cli, 'policy', 'mode', 'reject'], { encoding: 'utf8', timeout: 60000 })
   const out = (r.stdout ?? '') + (r.stderr ?? '')
   ok('setting a mode succeeds or fails cleanly', r.status === 0 || r.status === 1, `status=${r.status}`)
-  ok('the output does not claim a termination this tool cannot perform',
-    !/TERMINAT/i.test(out), out.trim().slice(0, 120))
+  // Matched on the CLAIM, not the word. The old message said "unpermitted stealth will be
+  // TERMINATED", which is a promise. The new one says the mode would have acted N times, each
+  // time to terminate the process -- a counterfactual that names the act honestly, and which a
+  // check for the bare word would fail.
+  const plain = stripAnsi(out)
+  ok('the output does not promise a termination this tool cannot perform',
+    !/will be terminated/i.test(plain) && !/enforcement is on/i.test(plain), plain.trim().slice(0, 120))
   ok('and it says what actually happens instead',
-    /nothing acts on this mode/i.test(out) || r.status !== 0, out.trim().slice(0, 120))
+    /nothing acts on this mode/i.test(out) || r.status !== 0, stripAnsi(out).trim().slice(0, 120))
   // Leave the user's policy as it was: the default is observe, and a test must not change it.
   spawnSync(process.execPath, [cli, 'policy', 'mode', 'observe'], { encoding: 'utf8', timeout: 60000 })
 
@@ -1592,6 +1606,45 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   rmSync(scratch, { recursive: true, force: true })
   rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+}
+
+// ── stage 0: the trigger, with nothing attached to it ─
+// `wouldAct` has been computed by decideSignals since the layer was written and read by nothing.
+// That is the right state until the promotion gate has a number to look at -- and an unread count is
+// not evidence, so the first thing stage 0 does is make it readable. Nothing acts on it.
+{
+  section('stage 0: the counterfactual')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  const d = g.decideSignals(ctx, { sinceMinutes: 4320 })
+  ok('decideSignals reports how many findings would be acted on',
+    Number.isInteger(d.actionable), JSON.stringify(d.actionable))
+  ok('the count matches the decisions it was derived from',
+    d.actionable === d.decisions.filter((x) => !x.allowed && x.verdict === 'ask').length,
+    `${d.actionable} vs ${d.decisions.filter((x) => !x.allowed && x.verdict === 'ask').length}`)
+
+  // Under observe the sentence must be about the mode, not a bare number: a number sitting next to
+  // "observe" reads like something happened.
+  ok('under observe it says the mode does nothing rather than quoting a count',
+    d.mode !== 'observe' || /nothing: the mode is observe/.test(d.wouldDo), d.wouldDo)
+  ok('and it flags that a non-observe mode is not implemented',
+    d.modeUnimplemented === (d.mode !== 'observe'), JSON.stringify({ mode: d.mode, flag: d.modeUnimplemented }))
+
+  // The vocabulary comes from the policy file's own documentation, and it must not claim an act the
+  // tool cannot perform -- the failure `policy mode reject` was already fixed for once.
+  ok('every mode has a description in the tool\'s own words',
+    typeof g.modeAction('suspend') === 'string' && g.modeAction('suspend').length > 5, g.modeAction('suspend'))
+  ok('an unknown mode is passed through rather than invented',
+    g.modeAction('something-else') === 'something-else', g.modeAction('something-else'))
+
+  // The switch is the moment the decision is made, so the count must be reachable from there.
+  const r = spawnSync(process.execPath, [cli, 'policy', 'mode', 'suspend'], { encoding: 'utf8', timeout: 120000 })
+  const out = (r.stdout ?? '') + (r.stderr ?? '')
+  ok('setting a mode reports what it would have done', /would have acted \d+ time/.test(stripAnsi(out)), stripAnsi(out).trim().slice(0, 140))
+  ok('and still refuses to claim it will act', !/will be terminated|enforcement is on/i.test(stripAnsi(out)), stripAnsi(out).trim().slice(0, 140))
+  spawnSync(process.execPath, [cli, 'policy', 'mode', 'observe'], { encoding: 'utf8', timeout: 60000 })
+  rmSync(join(homedir(), '.volcano-separator', 'policy.json'), { force: true })
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

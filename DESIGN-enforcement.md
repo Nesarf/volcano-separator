@@ -1,6 +1,7 @@
 # Enforcement: isolation and in-place encryption
 
-**Status: stage 1 built, and its undo is authenticated (`isolate` / `restore` / `isolated`).**
+**Status: stages 0 and 1 built (`decide` reports the counterfactual; `isolate` / `restore` /
+`isolated` exist and their undo is authenticated).**
 Stages 0, 2 and 3 are not built, and the decisions in section 9 are recorded but not yet acted on.
 
 The tool today records, names and asks. It cannot prevent anything. That gap is real and it is the
@@ -194,7 +195,7 @@ cannot arise makes the list harder to trust, not safer.
 
 Each stage ships on its own and is used before the next is written.
 
-**Stage 0 — the trigger, with nothing attached.** Make `wouldAct` something a person can see: the
+**Stage 0 — the trigger, with nothing attached. BUILT.** Make `wouldAct` something a person can see: the
 heartbeat reports when a rule *would* have acted, had `policy.mode` been anything but `observe`,
 and does nothing. This costs
 nothing to build and produces the data every later decision depends on.

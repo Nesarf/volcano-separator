@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- **The trigger, with nothing attached to it** (stage 0 of `DESIGN-enforcement.md`). `wouldAct` has
+  been computed by `decideSignals` since that layer was written and read by nothing, which is the
+  correct state until a promotion decision has a number to look at -- and an unread count is not
+  evidence, so making it readable is the whole of stage 0.
+  - `decide` now reports it: *would act 4 of 20 -- that many findings are serious and uncovered; a
+    mode other than observe would act on exactly that many, nothing does today*.
+  - **`policy mode <m>` reports it at the moment the switch is thrown**, because that is where the
+    decision is actually made and a number a person has to go and look up is a number they will not
+    look up: *over the last 72 hours this mode would have acted 4 time(s), each time to freeze the
+    process*.
+  - The heartbeat records it as `would:N`, so the evidence accumulates without anyone asking for it.
+  - Nothing acts on any of it. `decide --json` and the MCP `volcano_decide` tool carry `actionable`,
+    `wouldDo` and `modeUnimplemented`, so no caller can render a non-observe mode as though it
+    worked.
+
+### Fixed
+
+- **`decide` said `enforcement is ON` for any mode other than observe.** Nothing enforces anything:
+  `suspend` and `reject` are accepted by the CLI and implemented nowhere. That is the same false
+  claim `policy mode reject` was making when it said unpermitted stealth would be terminated, in a
+  second place. It now says what the mode would do and that nothing reads it yet.
+
 ### Security
 
 - **An isolation journal is only acted on if this tool wrote it.** `restore` runs `icacls /restore`

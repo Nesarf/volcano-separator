@@ -293,7 +293,7 @@ async function main() {
           `${new Date().toISOString()}  ${verdict.padEnd(18)} ${String(Date.now() - t0).padStart(6)}ms  ` +
             `uv=${ctx.uvx ? 'y' : 'n'} profile=${ctx.profile} ` +
             `${r.steps?.length ? '| ' + r.steps.map((st) => st.step).join('>') : ''}` +
-            `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh) : ''}` +
+            `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh + '/would:' + (sig.actionable ?? 0)) : ''}` +
             `${cus ? (cus.error
                 ? ' | custody=ERROR'
                 : ' | custody=' + (cus.released ? 'RELEASED(' + cus.released + ')'
@@ -484,6 +484,19 @@ async function main() {
         // signal this project exists to remove. It now says what actually happens.
         const caveat = m === 'observe' ? '' : C.yellow('  (recorded; nothing acts on this mode yet -- see DESIGN-enforcement.md)')
         console.log(`${w.ok ? C.green('ok') : C.red('FAIL')} mode -> ${m}${caveat}`)
+        // Stage 0: the moment a person flips the switch is the moment they should see what it
+        // would have done. A number they have to go and look up is a number they will not look up,
+        // and this is the only place the promotion decision is actually made.
+        if (m !== 'observe') {
+          const d = g.decideSignals(ctx, { sinceMinutes: 4320 })
+          console.log('')
+          // Not "would have <modeAction> N times": those are imperative phrases and the sentence
+          // came out as "would have freeze the process 4 time(s)". Said the other way round it
+          // reads correctly whatever the verb is.
+          console.log(`  over the last 72 hours this mode would have acted ${C.yellow(String(d.actionable))} time(s), each time to ${g.modeAction(m)}`)
+          console.log(C.dim(`  (${d.total} finding(s) seen, ${d.byVerdict.allow} already covered by the allowlist)`))
+          console.log(C.dim('  nothing has been done about any of them, and nothing will be until a mode is read -- see DESIGN-enforcement.md'))
+        }
         process.exit(w.ok ? 0 : 1)
       }
       if (sub === 'allow' || sub === 'deny') {
@@ -746,7 +759,18 @@ async function main() {
       console.log(`  allow  ${String(r.byVerdict.allow).padStart(4)}   covered by the allowlist, no decision needed`)
       console.log(`  ask    ${String(r.byVerdict.ask).padStart(4)}   needs a human`)
       console.log(`  note   ${String(r.byVerdict.note).padStart(4)}   recorded, not worth interrupting anyone`)
-      console.log(`  mode   ${r.mode}${r.mode === 'observe' ? C.green('   nothing would be done about any of them') : C.red('   enforcement is ON')}`)
+      // `enforcement is ON` was wrong in the same way `policy mode reject` claiming a termination was:
+      // suspend and reject are implemented nowhere, so a non-observe mode that says enforcement is on
+      // is the tool describing something it does not do.
+      console.log(`  mode   ${r.mode}${r.mode === 'observe' ? C.green('   nothing would be done about any of them') : C.yellow('   ' + r.wouldDo + ' -- if anything read the mode; nothing does yet')}`)
+      console.log('')
+      // Stage 0 of DESIGN-enforcement.md: the counterfactual, said out loud.
+      //
+      // It is the number the promotion gate needs. `wouldAct` has been computed since this layer was
+      // written and read by nothing, and an unread count is not evidence -- which is why making it
+      // readable is the first thing stage 0 does, before anything is attached to it.
+      console.log(`  would act  ${r.actionable} of ${r.total}  -- that many findings are serious and uncovered`)
+      console.log(C.dim('             a mode other than observe would act on exactly that many; nothing does today'))
       console.log('')
       for (const d of r.decisions) {
         const v = d.verdict === 'ask' ? C.yellow('ASK ') : d.verdict === 'allow' ? C.green('ALLOW') : C.dim('NOTE ')
