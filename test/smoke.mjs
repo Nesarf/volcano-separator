@@ -1697,30 +1697,42 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   const d = g.decideSignals(ctx, { sinceMinutes: 6 })
 
   // It goes beside the policy, not under the log directory. That is the whole point.
-  const before = g.readEvidence().length
-  const r = g.rollUpEvidence(ctx, d, { newlyRecorded: 0 })
+  // A scratch file, not the real one. The first version of this test deleted the accumulated
+  // evidence at the end -- so running the suite wiped exactly the data the suite exists to
+  // protect, and the two-week accumulation plan would have been reset by every green run.
+  const evFile = join(tmpdir(), 'vsep-evidence-' + process.pid + '.ndjson')
+  rmSync(evFile, { force: true })
+  const ectx = { ...ctx, evidenceFile: evFile }
+  const before = g.readEvidence(ectx).length
+  const r = g.rollUpEvidence(ectx, d, { newlyRecorded: 0 })
   ok('the roll-up writes somewhere', r.ok === true, JSON.stringify(r.detail ?? r.file))
-  ok('and that somewhere is the durable directory, not the log directory',
-    r.ok && !String(r.file).includes(String(process.env.TEMP ?? 'x')) && /\.volcano-separator/.test(String(r.file)),
-    String(r.file))
+  // The DEFAULT path is the property that matters, and it is asserted without writing to it. The
+  // scratch override above exists so this suite stops deleting the real accumulated evidence -- the
+  // first version of this test deleted it at the end, so every green run reset exactly the data the
+  // suite exists to protect. What is being checked here is where the default lands: beside the
+  // policy, and outside the directory the machine's disk hygiene tooling prunes at seven days.
+  const def = g.evidenceFile()
+  ok('the default lands beside the policy, not under the log directory',
+    def.includes('.volcano-separator') && !def.includes(String(process.env.TEMP ?? 'x')), def)
+  ok('and the override is honoured, so a test can write without touching it', r.file === evFile, String(r.file))
 
   // Signed increments accumulate. This is what makes it a sample rather than a snapshot.
-  const a = g.rollUpEvidence(ctx, d, { newlyRecorded: 5 })
-  const b = g.rollUpEvidence(ctx, d, { newlyRecorded: 2 })
+  const a = g.rollUpEvidence(ectx, d, { newlyRecorded: 5 })
+  const b = g.rollUpEvidence(ectx, d, { newlyRecorded: 2 })
   ok('increments accumulate into a running total for the day',
     a.ok && b.ok && b.actionableToday === a.actionableToday + 2,
     `${a.actionableToday} -> ${b.actionableToday}`)
 
   // And it stays one line per day however often the heartbeat runs.
-  const lines = g.readEvidence().filter((e) => e.day === new Date().toISOString().slice(0, 10))
+  const lines = g.readEvidence(ectx).filter((e) => e.day === new Date().toISOString().slice(0, 10))
   ok('a day appears exactly once however often the heartbeat runs', lines.length === 1, `${lines.length} line(s) today`)
-  ok('no day is lost by the rewrite', g.readEvidence().length >= before, `${before} -> ${g.readEvidence().length}`)
+  ok('no day is lost by the rewrite', g.readEvidence(ectx).length >= before, `${before} -> ${g.readEvidence(ectx).length}`)
 
   // An increment of zero must not reset the day.
-  const c = g.rollUpEvidence(ctx, d, { newlyRecorded: 0 })
+  const c = g.rollUpEvidence(ectx, d, { newlyRecorded: 0 })
   ok('a quiet window does not reset the day', c.actionableToday === b.actionableToday, `${b.actionableToday} -> ${c.actionableToday}`)
 
-  rmSync(join(homedir(), '.volcano-separator', 'evidence.ndjson'), { force: true })
+  rmSync(evFile, { force: true })
 }
 
 // ── isolated reports the filesystem, not the record ─

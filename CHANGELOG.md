@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **Running the test suite deleted the accumulated evidence.** `rollUpEvidence` and `readEvidence`
+  hardcoded `~/.volcano-separator/evidence.ndjson` with no override, so the test that covers them had
+  nowhere to write except the real file -- and it cleaned up by deleting it. Every green run reset
+  exactly the data the suite exists to protect, which would have made the two-week accumulation plan
+  fail in a way that looked like the heartbeat not working. There is now an `evidenceFile(ctx)`
+  override, the tests write to a scratch path, and the default is asserted separately without
+  touching it.
+
+### Fixed
+
 - **The heartbeat's counterfactual could not have been anything but zero.** Stage 0's whole point is
   that a promotion decision gets made from a number, and the number it was about to record was
   built from a hand-written list of fields that omitted `actionable` -- so `would:` would have read

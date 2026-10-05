@@ -614,7 +614,7 @@ async function main() {
     }
 
     case 'evidence': {
-      const days = g.readEvidence()
+      const days = g.readEvidence(ctx)
       if (opts.json) return emit({ ok: true, days })
       if (!days.length) {
         console.log('no evidence yet: the heartbeat rolls up one line a day')
