@@ -35,6 +35,87 @@ $ErrorActionPreference = 'Continue'
 
 $DENY_SPEC = '*S-1-1-0:(X)'   # Everyone, deny execute. SID rather than a name: names are localised.
 
+# ── journal authenticity ─────────────────────────────────────────────────────
+#
+# Why this exists
+# ---------------
+# `restore` reads a journal and runs `icacls /restore` with the ACL file the journal names. If a
+# journal can be forged, then "restore the original ACL" is itself a privilege-escalation primitive:
+# plant a file, wait for someone to restore it, and the tool applies whatever DACL the planted file
+# contains.
+#
+# So a journal is only acted on if this tool wrote it. Each one carries an HMAC over its
+# security-relevant fields, keyed by a random key that DPAPI protects for this machine.
+#
+# What this actually stops, stated honestly
+# -----------------------------------------
+# It raises the bar from "write a JSON file into a directory" to "run code as this user on this
+# machine". It does NOT stop an attacker who can already do the second thing -- they can call DPAPI
+# too. What it does stop is the cheap versions: a journal copied from elsewhere, a hand-written one,
+# a backup file swapped for another, a plausible-looking edit.
+#
+# Which is why the escape hatch matters more than the lock: **a journal that fails verification makes
+# the TOOL refuse, not the undo impossible.** The restore command is printed on every result and uses
+# icacls, so a person who trusts their own eyes more than our key can still undo by hand.
+
+$JOURNAL_ENTROPY = [Text.Encoding]::UTF8.GetBytes('volcano-separator/journal/v1')
+
+function Get-JournalKey {
+    param([string]$Dir)
+    $keyFile = Join-Path $Dir 'journal.key'
+    try {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+        if (Test-Path $keyFile) {
+            $blob = [Convert]::FromBase64String(((Get-Content -Raw -LiteralPath $keyFile).Trim()))
+            $raw = [Security.Cryptography.ProtectedData]::Unprotect($blob, $JOURNAL_ENTROPY, 'LocalMachine')
+            return @{ ok = $true; key = $raw; file = $keyFile; created = $false }
+        }
+        $raw = New-Object byte[] 32
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($raw)
+        $blob = [Security.Cryptography.ProtectedData]::Protect($raw, $JOURNAL_ENTROPY, 'LocalMachine')
+        if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Force -Path $Dir | Out-Null }
+        [Convert]::ToBase64String($blob) | Set-Content -LiteralPath $keyFile -Encoding ASCII
+        return @{ ok = $true; key = $raw; file = $keyFile; created = $true }
+    } catch {
+        return @{ ok = $false; detail = "could not obtain the journal key: $($_.Exception.Message)"; file = $keyFile }
+    }
+}
+
+# A canonical string, built by hand rather than by serialising a hashtable: ConvertTo-Json does not
+# promise key order, and an HMAC over a value whose order can change is an HMAC that fails at random.
+function Get-JournalMac {
+    param([byte[]]$Key, [string]$Canonical)
+    $h = [Security.Cryptography.HMACSHA256]::new($Key)
+    return [Convert]::ToBase64String($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($Canonical)))
+}
+
+function Get-JournalCanonical {
+    param([string]$Id, [string]$Path, [string]$BackupFile, [string]$BackupSha, [string]$DenySpec)
+    $sep = [string][char]10
+    return @('v1', $Id, $Path, $BackupFile, $BackupSha, $DenySpec) -join $sep
+}
+
+function Test-Journal {
+    param([string]$Dir, [object]$Spec)
+    $key = Get-JournalKey -Dir $Dir
+    if (-not $key.ok) { return @{ ok = $false; why = $key.detail } }
+    if (-not $Spec.hmac -or -not $Spec.backupSha256) {
+        return @{ ok = $false; why = 'this journal carries no signature, so this tool cannot vouch for it' }
+    }
+    $canon = Get-JournalCanonical -Id ([string]$Spec.id) -Path ([string]$Spec.path) -BackupFile ([string]$Spec.backupFile) -BackupSha ([string]$Spec.backupSha256) -DenySpec ([string]$Spec.denySpec)
+    $expect = Get-JournalMac -Key $key.key -Canonical $canon
+    if ($expect -ne [string]$Spec.hmac) {
+        return @{ ok = $false; why = 'the journal has been changed since this tool wrote it, or was not written by it' }
+    }
+    $backup = [string]$Spec.backupFile
+    if (-not (Test-Path $backup)) { return @{ ok = $false; why = "the ACL backup is missing: $backup" } }
+    $actual = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
+    if ($actual -ne ([string]$Spec.backupSha256).ToUpperInvariant()) {
+        return @{ ok = $false; why = 'the ACL backup does not match the hash this tool recorded for it' }
+    }
+    return @{ ok = $true; keyFile = $key.file; keyCreated = $key.created }
+}
+
 function Write-Activity {
     param([hashtable]$Event)
     if (-not $ActivityDir) { return }
@@ -108,10 +189,25 @@ if ($Restore) {
     try { $spec = Get-Content -Raw -LiteralPath $TargetPath | ConvertFrom-Json } catch { }
     if (-not $spec) { Write-Output (@{ ok = $false; detail = "cannot read a journal at $TargetPath" } | ConvertTo-Json -Compress); exit 1 }
 
-    $backup = [string]$spec.backupFile
     $dir = [System.IO.Path]::GetDirectoryName([string]$spec.path)
-    if (-not (Test-Path $backup)) {
-        Write-Output (@{ ok = $false; detail = "the ACL backup is missing: $backup"; restoreCommand = [string]$spec.restoreCommand } | ConvertTo-Json -Compress)
+    $backup = [string]$spec.backupFile
+
+    # Verified before anything is applied. A journal this tool did not write is not acted on -- see
+    # the note above Test-Journal. Refusing here does NOT make the undo impossible: the escape hatch
+    # is printed either way, and it is icacls, which does not need us.
+    $verdict = Test-Journal -Dir $JournalDir -Spec $spec
+    if (-not $verdict.ok) {
+        $byHand = [string]$spec.restoreCommand
+        if (-not $byHand) { $byHand = "icacls `"$dir`" /restore `"$backup`"" }
+        Write-Activity @{ kind = 'isolate'; action = 'refused-restore'; path = [string]$spec.path; id = [string]$spec.id; why = $verdict.why }
+        Write-Output (@{
+            ok = $false
+            refused = $true
+            path = [string]$spec.path
+            detail = "refused to restore: $($verdict.why)"
+            restoreCommand = $byHand
+            note = 'nothing was changed. If you trust this journal, that command undoes it without this tool.'
+        } | ConvertTo-Json -Compress)
         exit 1
     }
     $r = & icacls "$dir" /restore "$backup" 2>&1 | Out-String
@@ -191,12 +287,26 @@ if (-not (Test-Path $backup)) {
 }
 $denyDir = [System.IO.Path]::GetDirectoryName($resolved)
 $restoreCommand = "icacls `"$denyDir`" /restore `"$backup`""
+# Signed before it is written. The backup's hash goes into the signed payload too: signing only the
+# journal would leave the ACL file itself swappable, which is the same attack one step over.
+$key = Get-JournalKey -Dir $JournalDir
+if (-not $key.ok) {
+    Write-Output (@{ ok = $false; path = $resolved; detail = "$($key.detail); nothing was changed, because a journal this tool cannot vouch for is one it must not act on later" } | ConvertTo-Json -Compress)
+    exit 1
+}
+$backupSha = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
+$canon = Get-JournalCanonical -Id $id -Path $resolved -BackupFile $backup -BackupSha $backupSha -DenySpec $DENY_SPEC
+$mac = Get-JournalMac -Key $key.key -Canonical $canon
+
 $entry = @{
     id = $id
     kind = 'isolate'
     path = $resolved
     at = (Get-Date).ToUniversalTime().ToString('o')
     backupFile = $backup
+    backupSha256 = $backupSha
+    hmac = $mac
+    keyFile = $key.file
     journalFile = $journal
     denySpec = $DENY_SPEC
     aclBefore = $before

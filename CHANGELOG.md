@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Security
+
+- **An isolation journal is only acted on if this tool wrote it.** `restore` runs `icacls /restore`
+  with the ACL file the journal names, so a forgeable journal makes *"restore the original ACL"* a
+  privilege-escalation primitive: plant a file, wait for someone to restore it, and the tool applies
+  whatever DACL the planted file contains.
+  - Each journal carries an HMAC over its security-relevant fields **and the SHA-256 of the ACL
+    backup**, because signing only the journal would leave the backup swappable -- the same attack
+    one step over. The key is 32 random bytes protected by DPAPI for this machine.
+  - A journal that fails verification is refused with the reason, never silently applied, and the
+    refusal prints the `icacls` command that undoes the lock without this tool. **Refusing does not
+    make the undo impossible** -- that is the property the whole design rests on, and it is verified
+    by deleting the journal entirely and unlocking with the printed command.
+  - **The limit is stated rather than implied:** this raises the bar from *write a JSON file* to *run
+    code as this user on this machine*, and it does not stop the second thing. What it stops is the
+    cheap versions: a journal copied from elsewhere, a hand-written one, a swapped backup, a
+    plausible-looking edit.
+  - Eight checks: an edited journal, a swapped backup and an unsigned journal are each refused with
+    their own reason, and the untouched journal still restores afterwards.
+
 ### Added
 
 - **`isolate` / `restore` / `isolated` -- the first thing this tool can do to a file, and its undo.**

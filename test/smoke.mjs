@@ -1530,6 +1530,70 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
 }
 
+// ── a journal is only acted on if this tool wrote it ─
+// `restore` runs `icacls /restore` with the ACL file the journal names. If a journal can be forged,
+// then "restore the original ACL" is itself a privilege-escalation primitive: plant a file, wait for
+// someone to restore it, and the tool applies whatever DACL the planted file contains.
+//
+// The limit is stated rather than implied: this raises the bar from "write a JSON file" to "run code
+// as this user on this machine", and it does not stop the second thing. What it stops is the cheap
+// versions.
+{
+  section('journal authenticity')
+  const enf = await import('../lib/enforce.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-journal-' + process.pid) }
+  const scratch = join(tmpdir(), 'vsep-ja-' + process.pid)
+  mkdirSync(scratch, { recursive: true })
+
+  if (process.platform !== 'win32') {
+    ok('journal signing is Windows-only (skipped honestly)', true, '')
+  } else {
+    const target = join(scratch, 'signed.exe')
+    writeFileSync(target, 'x')
+    const applied = await enf.isolate(ctx, { path: target })
+    ok('an applied isolation is signed', applied.ok === true, JSON.stringify(applied.detail))
+
+    const spec = JSON.parse(readFileSync(applied.journalFile, 'utf8').replace(/^\uFEFF/, ''))
+    ok('the journal carries an hmac and the backup hash',
+      typeof spec.hmac === 'string' && spec.hmac.length > 20 && typeof spec.backupSha256 === 'string',
+      JSON.stringify(Object.keys(spec)))
+
+    // Tampering with the journal's content must be refused, and the refusal must come with the way
+    // out -- refusing is only acceptable because the undo does not depend on this tool.
+    const edited = { ...spec, path: join(scratch, 'somewhere-else.exe') }
+    writeFileSync(applied.journalFile, JSON.stringify(edited, null, 2))
+    const refused = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
+    ok('an edited journal is refused', refused.ok === false && refused.refused === true, JSON.stringify(refused.detail))
+    ok('and the refusal says why rather than "failed"',
+      /changed since this tool wrote it|not written by it/.test(refused.detail), refused.detail)
+    ok('and it prints the command that undoes the lock without this tool',
+      typeof refused.restoreCommand === 'string' && /icacls/.test(refused.restoreCommand), refused.restoreCommand)
+
+    // Swapping the ACL backup for another file is the same attack one step over.
+    writeFileSync(applied.journalFile, JSON.stringify(spec, null, 2))
+    const realBackup = readFileSync(spec.backupFile)
+    writeFileSync(spec.backupFile, 'not an acl file')
+    const swapped = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
+    ok('a swapped ACL backup is refused', swapped.ok === false && /does not match the hash/.test(swapped.detail), swapped.detail)
+    writeFileSync(spec.backupFile, realBackup)
+
+    // An unsigned journal -- the shape an attacker would hand-write -- is refused too.
+    const { hmac, ...unsigned } = spec
+    writeFileSync(applied.journalFile, JSON.stringify(unsigned, null, 2))
+    const noSig = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
+    ok('an unsigned journal is refused', noSig.ok === false && /no signature/.test(noSig.detail), noSig.detail)
+
+    // Put the good journal back, and prove the lock can still be lifted.
+    writeFileSync(applied.journalFile, JSON.stringify(spec, null, 2))
+    const restored = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
+    ok('the original journal still restores', restored.ok === true, JSON.stringify(restored.detail))
+  }
+
+  rmSync(scratch, { recursive: true, force: true })
+  rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

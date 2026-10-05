@@ -1,7 +1,7 @@
 # Enforcement: isolation and in-place encryption
 
-**Status: stage 1 built (`isolate` / `restore` / `isolated`). Stages 0, 2 and 3 are not, and the
-decisions below are recorded but not yet acted on.**
+**Status: stage 1 built, and its undo is authenticated (`isolate` / `restore` / `isolated`).**
+Stages 0, 2 and 3 are not built, and the decisions in section 9 are recorded but not yet acted on.
 
 The tool today records, names and asks. It cannot prevent anything. That gap is real and it is the
 last thing standing between what this is and what it was meant to be. It is also the half where a
@@ -241,10 +241,18 @@ Three protections were added because system-level reach is what makes them neces
 2. **The undo journal must not live anywhere prunable.** It sits beside the policy, not under the
    cache, because a cache is something a person is invited to clean and a cleaned undo is not an
    undo.
-3. **The journal must be tamper-evident.** Otherwise "restore the original ACL" is itself a
-   privilege-escalation primitive: forge a journal and the tool will happily apply it. This is where
-   the machine-and-user-bound key belongs, and it is **not yet built** -- today the journals are
-   plaintext, which is the most important thing left undone in this document.
+3. **The journal is tamper-evident. BUILT.** Otherwise "restore the original ACL" is itself a
+   privilege-escalation primitive: forge a journal and the tool applies whatever DACL it names.
+   Each journal now carries an HMAC over its security-relevant fields **and the hash of the ACL
+   backup**, keyed by a random 32-byte key that DPAPI protects for this machine. Signing only the
+   journal would have left the ACL file itself swappable, which is the same attack one step over.
+   A journal that fails verification is refused with the reason, and the restore command is printed
+   either way.
+
+   **What this stops, precisely.** It raises the bar from "write a JSON file into a directory" to
+   "run code as this user on this machine". It does not stop the second thing -- anyone who can do
+   that can call DPAPI too. What it does stop is the cheap versions: a journal copied from
+   elsewhere, a hand-written one, a backup swapped for another, a plausible-looking edit.
 ## 10. What I would build first
 
 **Stage 0, and nothing else.** It is small, it is safe, it produces the evidence that every later
