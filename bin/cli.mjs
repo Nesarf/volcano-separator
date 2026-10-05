@@ -582,7 +582,7 @@ async function main() {
     }
 
     case 'isolated': {
-      const l = enf.isolatedFiles(ctx)
+      const l = await enf.isolatedFiles(ctx)
       if (opts.json) return emit(l)
       console.log(`isolation journals: ${l.dir}`)
       if (!l.entries.length) { console.log(C.dim('  (none)')); break }

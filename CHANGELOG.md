@@ -17,7 +17,23 @@
     reporting. **Verified by deleting `actionable` and watching `would:?` appear**, then restoring it
     and watching `would:0` come back -- a guard that has never fired is a hypothesis.
 
+### Fixed
+
+- **`isolated` reported the record instead of the filesystem.** A journal says what was done at the
+  time; a file unlocked by hand, by another tool, or by an administrator restoring an ACL still read
+  as `applied`. That contradicted the rule the module states in its own comment -- *the ACL is the
+  authority, not our record of it* -- and a promise in a comment that nothing implements is the same
+  class of thing as a counter that cannot vary. The state is now read from the ACL, in one batched
+  PowerShell call rather than one per journal, and it distinguishes `applied`, `not-denied` and
+  `file-missing`.
+
 ### Added
+
+- **`volcano_isolated` and `volcano_evidence` in the MCP surface** (13 tools -> 15). Both read-only.
+  `isolate` and `restore` are deliberately still not exposed: an agent should not be able to change
+  what can execute on this machine, and that line is not worth crossing for convenience.
+
+### Security
 
 - **`evidence` -- the counterfactual, accumulated where a cache cleaner will not reach it.** This
   came out of checking whether stage 0's data would actually pile up, and it would not have. The

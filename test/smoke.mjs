@@ -1523,7 +1523,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     // The journal is what makes the undo findable later, and it is written by PowerShell -- which
     // writes a BOM. JSON.parse throws on that, and the first version reported every journal as
     // unreadable because of it.
-    const listed = enf.isolatedFiles(ctx)
+    const listed = await enf.isolatedFiles(ctx)
     const mine = listed.entries.filter((e) => e.path === target)
     ok('the journal is readable back', mine.length >= 1 && mine.every((e) => e.state !== 'unreadable'),
       JSON.stringify(listed.entries.map((e) => e.state)))
@@ -1535,7 +1535,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     // The undo is the point. `denied` is not the script's opinion that it succeeded -- it is read
     // back from icacls after the restore, so a restore that leaves the DENY in place reports
     // denied: true and fails here. That distinction is the whole reason the field exists.
-    const relisted = enf.isolatedFiles(ctx)
+    const relisted = await enf.isolatedFiles(ctx)
     ok('the journal still exists after a restore (it is a record, not a flag)',
       relisted.entries.some((e) => e.journal === applied.journalFile), 'journal disappeared')
   }
@@ -1721,6 +1721,53 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('a quiet window does not reset the day', c.actionableToday === b.actionableToday, `${b.actionableToday} -> ${c.actionableToday}`)
 
   rmSync(join(homedir(), '.volcano-separator', 'evidence.ndjson'), { force: true })
+}
+
+// ── isolated reports the filesystem, not the record ─
+// A journal records what was done at the time. A file unlocked by hand, by another tool, or by an
+// administrator restoring an ACL still read as `applied` -- which contradicted the rule the module
+// states in its own comment: the ACL is the authority, not our record of it. An unread promise in a
+// comment is the same class of thing as a counter that cannot vary.
+{
+  section('isolation live state')
+  const enf = await import('../lib/enforce.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-live-' + process.pid) }
+  const scratch = join(tmpdir(), 'vsep-lv-' + process.pid)
+  mkdirSync(scratch, { recursive: true })
+
+  if (process.platform !== 'win32') {
+    ok('live isolation state is Windows-only (skipped honestly)', true, '')
+  } else {
+    const target = join(scratch, 'live.exe')
+    writeFileSync(target, 'x')
+    const applied = await enf.isolate(ctx, { path: target })
+
+    const fresh = await enf.isolatedFiles(ctx)
+    const entry = fresh.entries.find((e) => e.path === target)
+    ok('a freshly isolated file reports applied, read from the ACL',
+      entry?.state === 'applied' && entry?.denied === true, JSON.stringify(entry))
+
+    // Lift it behind the tool's back, exactly as an administrator restoring an ACL would.
+    const { spawnSync } = await import('node:child_process')
+    spawnSync('icacls', [scratch, '/restore', applied.backupFile], { encoding: 'utf8' })
+
+    const after = await enf.isolatedFiles(ctx)
+    const lifted = after.entries.find((e) => e.path === target)
+    ok('a file unlocked behind the tool\'s back stops reporting applied',
+      lifted?.state === 'not-denied' && lifted?.denied === false, JSON.stringify(lifted))
+    ok('and the journal is still there, because it is a record and not a flag',
+      existsSync(applied.journalFile), applied.journalFile)
+
+    rmSync(target, { force: true })
+    const gone = await enf.isolatedFiles(ctx)
+    const missing = gone.entries.find((e) => e.path === target)
+    ok('a file that no longer exists says so rather than reporting a lock on nothing',
+      missing?.state === 'file-missing' && missing?.exists === false, JSON.stringify(missing))
+  }
+
+  rmSync(scratch, { recursive: true, force: true })
+  rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
