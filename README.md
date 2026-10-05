@@ -89,6 +89,14 @@ volcano-separator defer [--wait]    # exit 0 = go ahead, 3 = not now
 `uvx --with ... --help`, and uvx builds an environment to run anything — so it is behind `--deep`
 and reported as unmeasured otherwise.
 
+Warmth itself is a question about **completeness, not speed**: the probe resolves with the
+network off, so success proves the environment is complete locally and failure proves it is not.
+It cannot download, which matters twice over — the probe cannot leave a half-populated cache
+behind, and it cannot make a cold environment look warm by quietly filling it. An earlier version
+timed a `uvx` run and called anything slower than 15 s cold, which meant a busy machine reported
+a warm environment as cold and triggered the full warm-up the measurement exists to avoid. If the
+probe runs out of time now it says *undetermined*, because a guess in that direction is expensive.
+
 **Activity**
 
 ```bash
@@ -257,7 +265,7 @@ Tune behaviour in `DEFAULTS` at the top of `lib/core.mjs`, or in the policy file
 profile: 'coding-agent',
 port: 9077,
 withPackages: ['pg0-embedded'],
-warmProbeMs: 15000,               // a dry run slower than this means the env is cold
+warmProbeMs: 15000,               // safety timeout for the offline probe, not the warm/cold test
 warmBudgetMs: 15 * 60 * 1000,
 serveBudgetMs: 5 * 60 * 1000,
 taskName: 'Volcano-Separator',

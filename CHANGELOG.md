@@ -20,6 +20,31 @@
     `? GB across ? file(s) walked` -- which call successfully, return text, and say nothing. A
     handshake or a schema check would have passed all three.
 
+### Changed
+
+- **Warmth is now a question about completeness, not speed, and the probe can no longer make the
+  problem it measures.** `probeEnv` ran `uvx ... --help` and called the environment warm if that
+  returned inside `warmProbeMs` (15 s). Two things were wrong with it.
+  - A warm environment on a loaded machine — busy disk, busy CPU — takes longer than 15 s and was
+    reported cold, and every "cold" verdict triggers a full warm-up. The measurement was producing
+    the work it exists to avoid.
+  - On a genuinely cold environment the probe itself began downloading and was then killed at the
+    timeout, leaving a half-populated cache and paying part of the cost on every single call.
+  - The probe now resolves with `--offline`. Success proves the environment is complete locally;
+    failure proves it is not; and it cannot download, so it cannot leave a partial cache behind or
+    make a cold environment look warm by quietly filling it. Measured: a cold probe went from 15 s
+    of downloading-then-killed to **75–106 ms**, and the uv cache gained no entries across a run.
+  - Elapsed time is reported as context and no longer decides anything. If the probe runs out of
+    time it says **undetermined** — `could not determine within 15000 ms -- the environment may be
+    warm on a busy machine, or genuinely cold` — because it is not an answer and a guess in that
+    direction costs a full warm-up. `warm` still proceeds on an undetermined probe, since a needless
+    warm-up is a no-op while a skipped one is an outage, but it says which of the two it is acting on
+    rather than reporting an unknown as a cold reading.
+  - The failure line is taken from uv's diagnosis rather than its last non-empty line, which is
+    usually the tail of a wrapped sentence: `unsatisfiable.` tells a reader nothing.
+  - `warmProbeMs` is now documented as a safety timeout rather than the warm/cold test, in both the
+    defaults and the README.
+
 ### Security
 
 - **The daemon collector now identifies the daemon instead of a name.** `stop`'s second level

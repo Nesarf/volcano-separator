@@ -1136,6 +1136,55 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     !/ParentProcessId\)\s*\}\s*#.*descend/.test(src) && /ParentProcessId/.test(src), 'the walk changed shape')
 }
 
+// ── warmth is a question about completeness, not about speed ─
+// The probe used to run `uvx ... --help` and call the env warm if it returned within 15 s. Two
+// things were wrong with that. A warm env on a loaded machine takes longer than 15 s and was
+// reported cold -- and every "cold" verdict triggers a full warm-up, so the measurement produced
+// the work it exists to avoid. Worse, on a genuinely cold env the probe itself started downloading
+// and was killed at the timeout, leaving a half-populated cache and paying part of the cost on
+// every call.
+//
+// --offline changes the question: resolving with the network off either succeeds, which proves the
+// env is complete locally, or fails immediately, which proves it is not. It cannot download.
+{
+  section('env warmth probe')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  const warm = await g.probeEnv(ctx)
+  if (!warm.ok) {
+    ok('uvx is unavailable here, so the probe cannot be exercised (skipped honestly)', true, warm.detail)
+  } else {
+    ok('a complete environment is reported warm', warm.warm === true && warm.known === true, JSON.stringify(warm.detail))
+    ok('the warm detail says what was actually proven', /offline/.test(warm.detail), warm.detail)
+  }
+
+  // A version that cannot exist is the cheapest honest way to stage "not available locally", and it
+  // must come back fast: a probe that downloaded would take far longer than this before failing.
+  const cold = await g.probeEnv({ ...ctx, embedVersion: '99.99.99' })
+  ok('an environment that cannot resolve offline is reported cold',
+    cold.warm === false && cold.known === true, JSON.stringify(cold.detail))
+  ok('the cold verdict is definite, not a timeout guess', /cannot be resolved without the network/.test(cold.detail), cold.detail)
+  ok('a cold verdict does not mean a long download was started and killed', cold.ms < 10000, `${cold.ms} ms`)
+
+  // The distinction the old probe could not make, and the one that matters: a timeout is not an
+  // answer. Reporting it as cold costs a full warm-up on a machine that may simply have been busy.
+  const unknown = await g.probeEnv({ ...ctx, warmProbeMs: 1 })
+  ok('a probe that runs out of time reports undetermined rather than cold',
+    unknown.known === false && !/env is cold/.test(unknown.detail), JSON.stringify(unknown.detail))
+  ok('the undetermined detail says which two things it might be',
+    /may be warm/.test(unknown.detail) && /or genuinely cold/.test(unknown.detail), unknown.detail)
+
+  // Asserted on the source, because "it did not download this time" is not the property that
+  // matters -- "it cannot download" is, and only the flag guarantees that.
+  const src = readFileSync(join(projectDir, 'lib', 'core.mjs'), 'utf8')
+  ok('the probe resolves offline, so it cannot populate the cache it is measuring',
+    /uvFlags\(ctx\), '--offline', '--with'/.test(src), 'the --offline flag was dropped from the probe')
+  // The warm-up itself must still be allowed to download; that is its job.
+  ok('the warm-up still runs online',
+    !/--offline[\s\S]{0,200}warmBudgetMs/.test(src.slice(src.indexOf('export async function warm'))), 'the warm-up lost its network access')
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
