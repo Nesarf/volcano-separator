@@ -45,6 +45,28 @@
   - `warmProbeMs` is now documented as a safety timeout rather than the warm/cold test, in both the
     defaults and the README.
 
+### Changed
+
+- **core.mjs was split up.** It had reached 3416 lines and held the whole application: config,
+  process execution, the PowerShell bridge, health, lifecycle, the scheduler, activity, signals,
+  policy, redline and custody. It is now 428 lines of config, context and re-exports, with the
+  layers in their own files:
+
+  ```
+  platform, commandline           no outgoing imports
+  policy, resources            -> platform (+commandline)
+  activity, custody, signals   -> the two leaves plus policy
+  redline, live                -> activity (+commandline)
+  supervisor                   -> platform, resources, custody
+  uvcache                      -> platform
+  core                         -> all of the above
+  ```
+
+  Nothing changed about what the tool does: the same 74 exports resolve to the same things, and
+  the same checks pass before and after. The layering is acyclic and can be read off the import
+  lines, which is the point -- a split that leaves modules importing each other is a second
+  core.mjs spread across files rather than a smaller one.
+
 ### Security
 
 - **The daemon collector now identifies the daemon instead of a name.** `stop`'s second level
