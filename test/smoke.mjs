@@ -1185,6 +1185,43 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     !/--offline[\s\S]{0,200}warmBudgetMs/.test(src.slice(src.indexOf('export async function warm'))), 'the warm-up lost its network access')
 }
 
+// ── the module surface is a contract ─
+// core.mjs is 3400 lines and the next thing it needs is to be broken up. A refactor of that size
+// fails in a particular way: a function stops being exported, every test still passes because the
+// tests call the ones that survived, and the only thing that notices is an external consumer --
+// which is exactly who is not running here.
+//
+// So the surface is written down. Names may be ADDED freely; this fails only if one goes missing,
+// which is the failure a split actually produces. The list is not a wish: it was captured from the
+// module as it stands, and every entry is reachable by something (the CLI, the MCP server, the
+// tests, or a documented consumer).
+{
+  section('module surface')
+  const g = await import('../lib/core.mjs')
+  const EXPECTED = [
+    'DEFAULTS', 'POLICY_DEFAULTS', 'REDACTED', 'activityDir', 'activityTaskName', 'activityTaskState',
+    'analyzeSignals', 'ancestry', 'appendToActivity', 'custodyEvents', 'custodyOrphans', 'custodyReport',
+    'custodyState', 'custodyTimeline', 'custodyTimelineLive', 'daemonArgs', 'decideSignals', 'detain',
+    'doctor', 'ensurePgService', 'findPluginLogs', 'findPortOwner', 'gateHeavyWork', 'guardCacheOp',
+    'heal', 'humanDuration', 'installActivityTask', 'installService', 'killDaemonTree', 'liveProcesses',
+    'loadPolicy', 'newLogPath', 'policyAllows', 'policyPath', 'probeActivityRecorder', 'probeCustody',
+    'probeDaemon', 'probeDaemonLog', 'probeDshHost', 'probeEnv', 'probePort', 'probePostgres',
+    'probeResources', 'probeUv', 'readActivity', 'readDetainRecords', 'readLogs', 'readStealth',
+    'rebuildCustody', 'reconcileCustody', 'recordDecisions', 'recordRedline', 'redactCommandLine', 'redlineAreas',
+    'resolveContext', 'restart', 'reveal', 'run', 'savePolicy', 'scanRedline',
+    'scanSuspended', 'serve', 'serviceState', 'staleCustody', 'status', 'stop',
+    'summarizeActivity', 'taskScriptPath', 'unauthorizedReleases', 'uninstallActivityTask', 'uninstallService', 'unrecordedCustody',
+    'uvFlags', 'warm',
+  ]
+  const present = new Set(Object.keys(g))
+  const missing = EXPECTED.filter((n) => !present.has(n))
+  ok('every export core.mjs had is still exported', missing.length === 0, missing.join(', '))
+  ok('the surface is not empty for a vacuous reason', present.size >= EXPECTED.length, `${present.size} vs ${EXPECTED.length}`)
+  // Functions, not just names: a re-export that resolves to undefined passes a key check.
+  const notFunctions = EXPECTED.filter((n) => g[n] === undefined)
+  ok('no export resolved to undefined', notFunctions.length === 0, notFunctions.join(', '))
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
