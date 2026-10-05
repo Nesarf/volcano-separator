@@ -67,6 +67,26 @@
   lines, which is the point -- a split that leaves modules importing each other is a second
   core.mjs spread across files rather than a smaller one.
 
+### Fixed
+
+- **The database's deployment and its management are now answered separately.** The probe hardcoded
+  the embedded layout (`~/.pg0/instances/hindsight-embed-<profile>/data`) while the service it
+  started was whatever happened to be named `hindsight-pg`. Those are answers to two different
+  questions -- where the data is, and who starts the process -- and conflating them meant a machine
+  with a database somewhere else was told its data directory was missing, while a machine with no
+  such service was told *the database is not managed here*, which is true only if nothing else is
+  managing it.
+  - `pgDataLocation` resolves the data directory and labels the deployment: `embedded`, `declared`
+    (the caller said where it is) or `unknown`. It respects `ctx.pgDataDir`, which previously did
+    not exist as an option.
+  - `ensurePgService` states which management model it concluded -- `windows-service`,
+    `embed-manager` or `external` -- instead of a skip that reads like a shrug, and its detail names
+    both the model and the deployment.
+  - `status` now says *embedded data at ...* rather than *data at ...*, so which model is in play is
+    visible in the line people actually read.
+  - Dead code removed: `const pgReady = join(process.env.ProgramFiles, '..', '.pg0')`, which was
+    never referenced and resolved to `C:\.pg0`, a path that does not exist.
+
 ### Security
 
 - **The daemon collector now identifies the daemon instead of a name.** `stop`'s second level

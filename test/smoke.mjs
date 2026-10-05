@@ -1386,6 +1386,56 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     files.length + ' module(s), ' + Object.values(exportsOf).reduce((a, x) => a + x.size, 0) + ' export(s)')
 }
 
+// ── the database: deployment and management are two questions ─
+// The probe used to hardcode the embedded layout while the service it started was whatever happened
+// to be named hindsight-pg. Those answer different questions -- where the data is, and who starts
+// the process -- and conflating them meant a machine with a database somewhere else was told its
+// data directory was missing, and a machine with no such service was told "the database is not
+// managed here", which is only true if nothing else is managing it.
+{
+  section('database topology')
+  const sup = await import('../lib/supervisor.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  const loc = sup.pgDataLocation(ctx)
+  ok('the data location says which deployment it found',
+    ['embedded', 'declared', 'unknown'].includes(loc.deployment), JSON.stringify(loc))
+  ok('an embedded deployment is reported with its path and that it exists',
+    loc.deployment !== 'embedded' || (loc.exists === true && /\.pg0/.test(loc.dataDir)), JSON.stringify(loc))
+
+  // A declared location wins and is labelled as declared, not as embedded.
+  const declared = sup.pgDataLocation({ ...ctx, pgDataDir: process.cwd() })
+  ok('a declared data directory is reported as declared',
+    declared.deployment === 'declared' && declared.exists === true, JSON.stringify(declared))
+  const declaredMissing = sup.pgDataLocation({ ...ctx, pgDataDir: join(process.cwd(), 'nope-not-here') })
+  ok('a declared directory that is missing says so rather than falling back',
+    declaredMissing.deployment === 'declared' && declaredMissing.exists === false, JSON.stringify(declaredMissing))
+
+  const pg = await sup.probePostgres(ctx)
+  ok('the postgres probe names the deployment in its detail',
+    /embedded|declared|unknown/.test(pg.detail), pg.detail)
+  ok('the probe carries the deployment as a field, not only in prose',
+    typeof pg.deployment === 'string' && pg.deployment.length > 0, JSON.stringify(pg))
+
+  // Management is the other question, and it must name which model it concluded rather than
+  // reporting a skip that reads like a shrug.
+  if (process.platform === 'win32') {
+    const real = await sup.ensurePgService(ctx, { log: () => {} })
+    ok('the database service step names its management model',
+      ['windows-service', 'embed-manager', 'external'].includes(real.management), JSON.stringify(real))
+    ok('and the detail says something a person can act on',
+      typeof real.detail === 'string' && real.detail.length > 20, real.detail)
+    const absent = await sup.ensurePgService({ ...ctx, pgService: 'no-such-pg-service-xyz' }, { log: () => {} })
+    ok('a service that does not exist is reported as another model, not as unmanaged',
+      absent.management === 'embed-manager' || absent.management === 'external', JSON.stringify(absent))
+    ok('and it does not claim the database is unmanaged',
+      !/not managed here/.test(absent.detail), absent.detail)
+  } else {
+    ok('the database service step is Windows-only (skipped honestly)', true, '')
+  }
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
