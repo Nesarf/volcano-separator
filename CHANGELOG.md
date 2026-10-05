@@ -147,6 +147,24 @@
 - Dead code removed: `Test-LockHeld`, the check-then-act guard above, left with a note instead of
   quietly deleted.
 
+### Fixed
+
+- **Two runs in the same second shared a transcript.** The stamp was truncated to the second, so a
+  manual `heal` and the heartbeat -- exactly the pair that collides -- wrote to one file and each
+  overwrote the other. The symptom is not a missing log but a log mixing two recoveries, which is
+  worse: it reads as one confusing run instead of two clear ones. The name now carries milliseconds,
+  the pid, and a per-process counter.
+  - **The first attempt at the overwrite guard could not work, and the test caught it.** It checked
+    the filesystem for a clash, but `newLogPath` returns a *path* and the caller writes it later -- so
+    two calls in the same millisecond both see an empty directory and both return the same name.
+    Across processes the pid separates them and within one process the counter does; together those
+    cover the whole space a collision can happen in, which is why a counter is the right answer here
+    rather than more randomness.
+- **`heal` now generates a runId and hands it to every step.** The `warm` and `serve` transcripts of
+  one repair can be recognised as one repair afterwards. Without it the only link between them was
+  the wall clock -- and the reason this tool keeps transcripts at all is to answer *what happened
+  during that repair* once it is over.
+
 ### Security
 
 - **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known

@@ -12,7 +12,7 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -2092,6 +2092,44 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // And the claim it makes about itself has to be the true one.
   ok('the comment does not claim it sees the past',
     /started AND exited before this/.test(src), 'the boundary is not stated')
+}
+
+// ── two runs in the same second must not share a transcript ─
+// The stamp was truncated to the second, so a manual `heal` and the heartbeat -- exactly the pair that
+// collides -- wrote to one file and each overwrote the other. The symptom is not a missing log but a
+// log mixing two recoveries, which is worse: it reads as one confusing run instead of two clear ones.
+//
+// The runId is what makes a recovery reassemblable. Without it the only link between the transcripts of
+// one repair is the wall clock, and the whole reason this tool keeps transcripts is to answer "what
+// happened during that repair" once it is over.
+{
+  section('transcript naming')
+  const g = await import('../lib/core.mjs')
+  const dir = join(tmpdir(), 'vsep-logs-' + process.pid)
+  rmSync(dir, { recursive: true, force: true })
+  const ctx = { ...g.resolveContext({}), logDir: dir }
+
+  const a = g.newLogPath(ctx, 'warm', { runId: 'aaaa1111' })
+  const b = g.newLogPath(ctx, 'warm', { runId: 'bbbb2222' })
+  ok('two runs in the same second get different transcripts', a !== b, `${a} vs ${b}`)
+
+  ok('the name carries milliseconds rather than stopping at the second',
+    /T\d\d-\d\d-\d\d-\d{3}Z/.test(basename(a)), basename(a))
+  ok('and the runId', basename(a).includes('aaaa1111'), basename(a))
+  ok('and the pid, which two processes can share a millisecond with',
+    basename(a).includes(String(process.pid)), basename(a))
+
+  // Same runId twice is still two files: the same recovery asking twice for the same label must not
+  // overwrite the first answer.
+  const c = g.newLogPath(ctx, 'warm', { runId: 'aaaa1111' })
+  ok('asking twice with the same runId does not overwrite the first', c !== a, `${a} vs ${c}`)
+
+  // No runId is still allowed -- newLogPath is used outside heal too -- and must still not collide.
+  const d1 = g.newLogPath(ctx, 'serve')
+  const d2 = g.newLogPath(ctx, 'serve')
+  ok('a caller with no runId still gets a distinct name', d1 !== d2, `${d1} vs ${d2}`)
+
+  rmSync(dir, { recursive: true, force: true })
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
