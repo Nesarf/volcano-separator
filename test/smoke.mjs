@@ -13,7 +13,7 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const NL_SHIM = String.fromCharCode(10)
@@ -696,6 +696,86 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     closeSync(fd)
   }
   ok('a locked record is still reported as a running recorder', lockedRead.recorderRunning === true, `recorderRunning=${lockedRead.recorderRunning}`)
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// ── L1 signals / L2 decisions: positive cases ─
+// These rules had no test coverage, and on this machine they had never produced a finding that
+// was not already allowlisted -- so `ask` was always 0. Zero false positives and zero true
+// positives look identical from the outside, and only a synthetic case tells them apart.
+//
+// Writing that case immediately found a real defect, recorded in the last two checks below.
+{
+  const dir = join(tmpdir(), 'volcano-separator-signals-' + process.pid)
+  rmSync(dir, { recursive: true, force: true })
+  const act = join(dir, 'activity')
+  mkdirSync(act, { recursive: true })
+  const BS = String.fromCharCode(92)
+  const now = new Date().toISOString()
+  const gonePath = 'D:' + BS + 'volcano-smoke-nonexistent' + BS + 'gone.exe'
+
+  // A scratch path that is NOT covered by the built-in allowlist. tmpdir() cannot be used for
+  // this: on this machine it resolves to E:\DaShaoHuo\cache\tmp, and `path:e:/dashaohuo/` is a
+  // default allow entry -- which is exactly the defect the last two checks pin down.
+  const scratch = join(homedir(), 'AppData', 'Local', 'Temp', 'volcano-smoke', 'payload.exe')
+  const scratchCmd = '"' + scratch + '"'
+
+  const rows = [
+    { t: now, kind: 'persist', surface: 'RunKeys', action: 'added', name: 'evil', value: scratch },
+    { t: now, kind: 'proc-start', pid: 9001, ppid: 1, name: 'payload.exe', cmd: scratchCmd },
+    { t: now, kind: 'proc-start', pid: 9002, ppid: 1, name: 'gone.exe', cmd: '"' + gonePath + '"' },
+    { t: now, kind: 'proc-start', pid: 9003, ppid: 1, name: 'cmd.exe', cmd: '"C:' + BS + 'Windows' + BS + 'System32' + BS + 'cmd.exe"' },
+  ]
+  writeFileSync(join(act, 'activity-2026-01-01.ndjson'),
+    rows.map((r) => JSON.stringify(r)).join(String.fromCharCode(10)) + String.fromCharCode(10))
+
+  const ctx = { logDir: dir, profile: 'smoke' }
+  const sig = g.analyzeSignals(ctx, { sinceMinutes: 60 })
+  const byRule = sig.byRule || {}
+  ok('persist-from-ephemeral fires', byRule['persist-from-ephemeral'] === 1, JSON.stringify(byRule))
+  ok('exec-from-ephemeral fires', byRule['exec-from-ephemeral'] === 1, JSON.stringify(byRule))
+  // Two, not one: the payload path does not exist either, so it also trips binary-vanished. That
+  // overlap is expected rather than a bug -- the rules describe different facts about one process.
+  ok('binary-vanished fires for the missing exe and the scratch payload',
+    byRule['binary-vanished'] === 2, JSON.stringify(byRule))
+  ok('an ordinary system process produces no finding', byRule['binary-vanished'] === 2 && sig.total === 4, `total ${sig.total}`)
+
+  const persist = sig.findings.find((f) => f.rule === 'persist-from-ephemeral')
+  const exec = sig.findings.find((f) => f.rule === 'exec-from-ephemeral')
+  ok('persistence from a scratch dir is high severity', persist && persist.severity === 'high', persist && persist.severity)
+  ok('running from a scratch dir is low severity', exec && exec.severity === 'low', exec && exec.severity)
+
+  const dec = g.decideSignals(ctx, { sinceMinutes: 60 })
+  const v = (rule) => (dec.decisions.find((d) => d.rule === rule) || {}).verdict
+  ok('an uncovered high finding asks for a human', v('persist-from-ephemeral') === 'ask', v('persist-from-ephemeral'))
+  ok('an uncovered low finding is only a note', v('exec-from-ephemeral') === 'note', v('exec-from-ephemeral'))
+  ok('nothing would act in observe mode', dec.decisions.every((d) => d.wouldAct === false), 'wouldAct true somewhere')
+
+  // Allowlisting must turn ask into allow -- the mechanism the whole design rests on: the human's
+  // decision is recorded, and the same finding stops asking.
+  const polFile = join(dir, 'policy.json')
+  const scratchRoot = join(homedir(), 'AppData', 'Local', 'Temp') + BS
+  writeFileSync(polFile, JSON.stringify({
+    mode: 'observe',
+    allow: ['path:' + scratchRoot.toLowerCase().split(BS).join('/')],
+  }))
+  const ctx2 = { logDir: dir, profile: 'smoke', policyFile: polFile }
+  const dec2 = g.decideSignals(ctx2, { sinceMinutes: 60 })
+  const v2 = (rule) => (dec2.decisions.find((d) => d.rule === rule) || {}).verdict
+  ok('allowlisting turns ask into allow', v2('persist-from-ephemeral') === 'allow', v2('persist-from-ephemeral'))
+  ok('allowlisting is reported, not silent', (dec2.decisions.find((d) => d.rule === 'persist-from-ephemeral') || {}).allowed != null)
+
+  // ── the defect this test found ─
+  // The machine's disk policy redirects TEMP to E:\DaShaoHuo\cache\tmp, and the built-in allow
+  // list contains `path:e:/dashaohuo/`. So the two rules whose entire subject is "a temp
+  // directory" are pre-approved on this machine and can never ask for a decision. ask was always
+  // 0 not because the machine is clean, but because the rule's target is allowlisted.
+  const realTmp = tmpdir()
+  const ctxReal = { logDir: dir, profile: 'smoke' }
+  const allowHit = g.policyAllows(g.loadPolicy(ctxReal), { path: join(realTmp, 'x.exe'), name: 'x.exe' })
+  ok('DEFECT: the real temp dir is allowlisted, so the ephemeral rules cannot fire here',
+    allowHit != null, `tmpdir=${realTmp} allowHit=${allowHit}`)
 
   rmSync(dir, { recursive: true, force: true })
 }
