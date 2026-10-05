@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import * as g from '../lib/core.mjs'
 import * as res from '../lib/resources.mjs'
+import * as uvc from '../lib/uvcache.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -85,6 +86,7 @@ Commands:
   activity [n]       the system-wide process/window/persistence record (default last 40)
   busy [minutes]     what has actually been running, grouped (runs, location, allowlist)
   redline [seconds]  what is sitting on C: in user-writable space (--record keeps findings)
+  cache [--prune] [--apply] [--keep N]   uv cache hygiene: duplicates, old versions, idle environments
   (heal --custody     also reconcile custody: a suspension is persistent, so a freeze nobody
                       came back for stays frozen; the alert names the release command)
   signals [minutes]  what looks like stealth, with evidence (observe-only)
@@ -740,6 +742,53 @@ async function main() {
       console.log('')
       console.log(C.dim('  this measures and names; it does not block. Blocking a write needs a filter driver.'))
       if (rec) console.log(C.dim(`  recorded ${rec.written} new finding(s) -> ${rec.file}`))
+      break
+    }
+
+    case 'cache': {
+      const scan = await uvc.scanUvCache(ctx)
+      if (!scan.ok) { console.log(C.red('FAIL') + ' cache: ' + scan.detail); process.exit(1) }
+      const plan = uvc.planUvPrune(scan, {
+        keepVersions: Number(opts.keep ?? 1) || 1,
+        pruneEnvironments: opts['keep-envs'] !== true,
+      })
+      const doApply = opts.apply === true
+      const result = opts.prune || doApply ? uvc.applyUvPrune(plan, { dryRun: !doApply }) : null
+      if (opts.json) return emit({ root: scan.root, total: scan.total, subdirs: scan.subdirs, plan, result })
+
+      const mb = (b) => (b / 1048576).toFixed(1).padStart(9) + ' MB'
+      console.log('uv cache: ' + scan.root)
+      console.log('  total ' + (scan.total / 1024 ** 3).toFixed(2) + ' GB')
+      for (const [k, v] of Object.entries(scan.subdirs).sort((a, b) => b[1].bytes - a[1].bytes)) {
+        console.log('    ' + String(k).padEnd(18) + mb(v.bytes) + '  ' + String(v.files).padStart(7) + ' files')
+      }
+      console.log('')
+      const sum = (arr) => arr.reduce((s, t) => s + t.bytes, 0)
+      const dupes = plan.targets.filter((t) => t.reason === 'duplicate')
+      const oldv = plan.targets.filter((t) => t.reason === 'old-version')
+      const envs = plan.targets.filter((t) => t.reason === 'stale-environment')
+      console.log('  packages cached        ' + scan.packages.size)
+      console.log('  duplicate copies       ' + dupes.length + '  (' + (sum(dupes) / 1048576).toFixed(0) + ' MB)')
+      console.log('  older versions         ' + oldv.length + '  (' + (sum(oldv) / 1048576).toFixed(0) + ' MB)')
+      console.log('  idle environments      ' + envs.length + '  (' + (sum(envs) / 1048576).toFixed(0) + ' MB)')
+      console.log('  in use, never touched  ' + plan.skippedInUse)
+      console.log('')
+      console.log('  reclaimable ' + plan.gb + ' GB, keeping the newest ' + plan.keepVersions + ' version(s) per package')
+      console.log('')
+      for (const t of plan.targets.slice(0, 12)) {
+        console.log('    ' + mb(t.bytes) + '  ' + String(t.reason).padEnd(18) + ' ' + t.name + (t.version ? ' ' + t.version : ''))
+      }
+      if (plan.targets.length > 12) console.log(C.dim('    ... and ' + (plan.targets.length - 12) + ' more'))
+      console.log('')
+      if (result) {
+        console.log((result.dryRun ? C.yellow('dry-run') : C.green('applied')) + ': ' + (result.dryRun ? 'would remove ' : 'removed ') + result.removed + ' entries, ' + result.gb + ' GB')
+        for (const f of result.failed) console.log(C.dim('  kept, in use: ' + f.hash))
+        if (result.dryRun) console.log(C.dim('  add --apply to actually remove'))
+      } else {
+        console.log(C.dim('  add --prune to list the exact removals, --apply to carry them out'))
+      }
+      console.log(C.dim('  In-use entries are found by scanning the executable path of every running process.'))
+      console.log(C.dim('  A delete that fails is reported, not retried: an entry that cannot be removed is one in use.'))
       break
     }
 
