@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+
+- **The MCP surface went from 3 tools to 13, and is read-only apart from `heal`.** The observation
+  and incident-response layers were reachable from the CLI and from nothing else, so a harness
+  could ask whether the service was up and could not ask what the machine had been doing. Now
+  exposed: `volcano_resources`, `volcano_activity`, `volcano_busy`, `volcano_ps`, `volcano_redline`,
+  `volcano_cache_plan`, `volcano_signals`, `volcano_decide`, `volcano_detained`, `volcano_timeline`.
+  - Deliberately absent: `volcano_detain`, `volcano_release`, `volcano_cache_apply`,
+    `volcano_policy_allow`. Freezing a process or deleting cache entries are decisions a human
+    should make; `cache_plan` exists so an agent can show a person what a prune *would* remove and
+    let them run it. `heal` stays because it repairs a service the agent is usually the reason for
+    needing, removes nothing, and the worst outcome is a slower path to the same state.
+  - Caller-supplied numbers are clamped. An agent asking for `limit: 1e9` gets a bound, not a hang.
+  - Every advertised tool is **called** by the suite, not just listed. Writing the surface this way
+    found three renderers reading field names that do not exist -- `over undefined min`,
+    `? GB across ? file(s) walked` -- which call successfully, return text, and say nothing. A
+    handshake or a schema check would have passed all three.
+
 ### Security
 
 - **Command lines are redacted before they are written.** The recorder stores every process's full

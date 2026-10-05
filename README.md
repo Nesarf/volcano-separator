@@ -123,12 +123,27 @@ Options: `--profile <name>` (default `coding-agent`), `--port <n>` (default `907
 |---|---|---|
 | CLI | `bin/cli.mjs` | humans, scripts, the scheduled task |
 | Library | `lib/core.mjs` | other tools (pure Node, zero dependencies) |
-| MCP | `lib/mcp.mjs` | any harness — currently `volcano_status` / `volcano_heal` / `volcano_doctor` |
+| MCP | `lib/mcp.mjs` | any harness — 13 tools, listed below |
 
-The MCP surface is **deliberately the smallest of the three**. It exposes the service lifecycle and
-nothing else; the observation and incident-response commands are not reachable from a model yet.
-That is a gap rather than a design, and the reason it has not been closed carelessly is that the
-read-only tools would be safe to expose and the mutating ones would not.
+The MCP surface is **read-only apart from `heal`**, and that is the design rather than a stage of
+completion.
+
+| Read-only | |
+|---|---|
+| service | `volcano_status` `volcano_doctor` |
+| machine | `volcano_resources` `volcano_ps` `volcano_redline` |
+| record | `volcano_activity` `volcano_busy` |
+| detection | `volcano_signals` `volcano_decide` |
+| custody | `volcano_detained` `volcano_timeline` |
+| cache | `volcano_cache_plan` |
+
+`volcano_heal` is the one that changes state: it repairs a service the agent is usually the reason
+for needing, removes nothing, and the worst outcome is a slower path to the same place.
+
+There is no `volcano_detain`, `volcano_release`, `volcano_cache_apply` or `volcano_policy_allow`.
+Freezing a process or deleting cache entries are decisions a human should make, and `cache_plan`
+exists so an agent can show a person exactly what a prune would remove and let them run it. An
+agent that can act on its own is a worse failure than one that has to ask.
 
 MCP client config:
 

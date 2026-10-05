@@ -1021,6 +1021,73 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   }
 }
 
+// ── every advertised MCP tool is called, not just listed ─
+// A tool that appears in tools/list and throws when called is worse than no tool: the harness
+// believes the capability exists. Writing this surface found three renderers reading field names
+// that do not exist -- `over undefined min`, `? GB across ? file(s)` -- which call successfully,
+// return text, and say nothing. A handshake or a schema check would have passed all three.
+{
+  section('mcp tool surface')
+  const child = spawn(process.execPath, [join(projectDir, 'lib', 'mcp.mjs')], { stdio: ['pipe', 'pipe', 'pipe'] })
+  let buf = ''
+  const pending = new Map()
+  child.stdout.on('data', (b) => {
+    buf += b.toString()
+    let i
+    while ((i = buf.indexOf(String.fromCharCode(10))) >= 0) {
+      const line = buf.slice(0, i)
+      buf = buf.slice(i + 1)
+      if (!line.trim()) continue
+      try {
+        const m = JSON.parse(line)
+        if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+      } catch { /* partial frame */ }
+    }
+  })
+  let seq = 0
+  const rpc = (method, params) => new Promise((resolve, reject) => {
+    const id = ++seq
+    pending.set(id, resolve)
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + String.fromCharCode(10))
+    setTimeout(() => { if (pending.has(id)) { pending.delete(id); reject(new Error('timeout: ' + method)) } }, 120000)
+  })
+
+  await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'smoke', version: '0' } })
+  const list = await rpc('tools/list', {})
+  const tools = list.result?.tools ?? []
+  ok('mcp advertises a tool surface', tools.length >= 10, `${tools.length} tool(s)`)
+  ok('every tool declares an object schema',
+    tools.every((t) => t.inputSchema && t.inputSchema.type === 'object'), 'a tool has no inputSchema')
+  ok('every tool has a description long enough to choose by',
+    tools.every((t) => typeof t.description === 'string' && t.description.length > 40), 'a tool has a thin description')
+
+  // Nothing that changes the machine, beyond the repair tool that was already there.
+  // Exact names, not a substring: volcano_detained READS the custody record and is safe, while
+  // volcano_detain would freeze a process. A substring test flagged the wrong one of the pair.
+  const FORBIDDEN = ['volcano_detain', 'volcano_release', 'volcano_cache_apply', 'volcano_policy_allow', 'volcano_uninstall']
+  const mutating = tools.map((t) => t.name).filter((n) => FORBIDDEN.includes(n))
+  ok('no destructive tool is exposed to a model', mutating.length === 0, mutating.join(', '))
+  ok('the read-only half of the custody pair IS exposed',
+    tools.some((t) => t.name === 'volcano_detained'), 'volcano_detained is missing')
+
+  const bad = []
+  for (const t of tools) {
+    try {
+      const r = await rpc('tools/call', { name: t.name, arguments: {} })
+      const text = r.result?.content?.[0]?.text ?? ''
+      if (r.error) bad.push(`${t.name}: ${JSON.stringify(r.error).slice(0, 60)}`)
+      else if (r.result?.isError) bad.push(`${t.name}: reported an error -- ${text.slice(0, 60)}`)
+      else if (!text.trim()) bad.push(`${t.name}: returned no text`)
+      // The failure mode this test was written for: a renderer reading a field that is not there.
+      else if (/undefined|\bNaN\b/.test(text)) bad.push(`${t.name}: output contains a placeholder -- ${text.split(String.fromCharCode(10))[0].slice(0, 70)}`)
+    } catch (e) {
+      bad.push(`${t.name}: ${String(e.message).slice(0, 60)}`)
+    }
+  }
+  child.kill()
+  ok('every advertised tool can actually be called and says something', bad.length === 0, bad.join(' | '))
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
