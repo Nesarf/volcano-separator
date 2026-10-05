@@ -2050,6 +2050,50 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   }
 }
 
+// ── the recorder must be one, and must not miss the moment it starts ─
+// Two defects in one file, both found by reading what it actually does rather than what it says.
+//
+// The boot race: the baseline snapshot was taken, and only then was the event subscription created.
+// A process that started in between was in neither the snapshot nor the stream -- and a process that
+// short-lived is exactly what an event-driven recorder exists to catch.
+//
+// The duplicate: the single-instance guard opened the lock to test it, disposed what it opened, and
+// then removed and recreated the file. Two recorders starting together could both pass the check.
+// This machine had two live recorders holding the same daily file when it was found.
+{
+  section('activity recorder startup')
+  const src = readFileSync(join(projectDir, 'bin', 'activity-watch.ps1'), 'utf8')
+
+  // The order is the fix, so the order is what is asserted. A snapshot before a subscription is the
+  // defect, and no amount of commenting makes it correct.
+  const sub = src.indexOf('Register-CimIndicationEvent -Query')
+  const base = src.indexOf("kind       = 'baseline'")
+  const baseAlt = src.indexOf("kind = 'baseline'")
+  const baseAt = base === -1 ? baseAlt : base
+  ok('the subscription is created before the baseline is taken',
+    sub !== -1 && baseAt !== -1 && sub < baseAt,
+    `subscription at ${sub}, baseline at ${baseAt} -- the baseline must come second`)
+  ok('and the baseline records that the subscription was already live',
+    /subscribed = \[bool\]\(Get-EventSubscriber/.test(src), 'the baseline does not say whether anything was listening')
+
+  // The guard must take the lock in one operation. A check that releases what it checked is not a
+  // guard -- the same shape as the uv cache prune that scanned and then deleted.
+  ok('the lock is taken atomically rather than checked and then taken',
+    /FileMode\]::CreateNew/.test(src), 'the lock is not created with CreateNew')
+  ok('the old check-then-act guard is gone',
+    !/^\s*\$script:HeldByOther\s*=/m.test(src), 'the check-then-act guard is still there')
+  ok('a stale lock is taken over rather than blocking for ever',
+    /took over a stale lock/.test(src), 'no stale-lock path')
+  ok('and an empty lock file is waited for rather than seized',
+    /between CreateNew and writing its pid/.test(src), 'the mid-creation case is not handled')
+  ok('failing to take the lock still lets the recorder run',
+    /Fail OPEN/.test(src), 'a guard that can switch the recorder off entirely is worse than a duplicate')
+
+  // And the claim it makes about itself has to be the true one.
+  ok('the comment does not claim it sees the past',
+    /started AND exited before this/.test(src), 'the boundary is not stated')
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

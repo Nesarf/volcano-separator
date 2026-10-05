@@ -119,6 +119,34 @@
   - `psql` is found by discovery under the pg0 installation rather than a hardcoded version, because
     a machine that upgrades keeps both.
 
+### Fixed
+
+- **Two activity recorders were running at once, holding the same daily file.** The single-instance
+  guard opened the lock to test it, disposed what it opened, and only then removed and recreated the
+  file -- so two recorders starting together could both pass the check. A boot or a task restart
+  produces exactly that. **Found live: this machine had two recorders, pids 9980 and 17244.** Same
+  shape as the uv cache prune that scanned and then deleted; check-then-act is a race whenever two of
+  the same thing can start at once.
+  - The lock is now taken in **one** operation. `FileMode::CreateNew` is the atomic part: exactly one
+    caller can create a file that does not exist.
+  - What is left is deciding whether an error means *someone is running* or *someone died and left
+    this behind*: the first stands down, the second takes over, and an **empty** lock file -- a
+    recorder between creating it and writing its pid -- is waited for rather than seized, because
+    that instant is precisely the boot race.
+  - Failing to take the lock still lets the recorder run. A duplicate is a defect; a recorder that
+    does not start at all is a blind spot, and this project already had a day where a guard that
+    failed closed wrote nothing and the only symptom was an empty file.
+- **The recorder subscribed to process events only after taking its baseline**, leaving a window in
+  which a process could start and land in neither the snapshot nor the stream. A process that lives
+  for less than that gap is exactly the kind this recorder exists to catch, and it was invisible
+  twice over. The subscription now comes first: events cover everything from then on, the baseline
+  covers whatever is already running, and together they cover everything. The baseline records
+  `subscribed` so the boundary is legible in the record rather than a matter of trust. A process that
+  started and exited before either is in neither -- that is stated rather than implied, because
+  nothing observes the past.
+- Dead code removed: `Test-LockHeld`, the check-then-act guard above, left with a note instead of
+  quietly deleted.
+
 ### Security
 
 - **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known

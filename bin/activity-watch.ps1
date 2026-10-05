@@ -71,40 +71,77 @@ $script:LockNote = ''
 # Is the lock held? Ask the filesystem, not the file's contents.
 #
 # The first version wrote the holder's pid and read it back. That failed in two ways at once: the
-# pid never reached disk (the file stayed 0 bytes), and reading an empty file threw, which the
-# caller took for 'stale'. An age heuristic was no better -- a lock that is genuinely held open
-# looks exactly like an abandoned one. Trying to open it exclusively answers the real question
-# directly, and needs no pid and no clock.
-function Test-LockHeld {
-    param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return $false }
-    try {
-        $probe = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-        $probe.Dispose()
-        return $false   # we could take it exclusively, so nobody else holds it
-    } catch {
-        return $true    # somebody holds it open
-    }
+# Test-LockHeld used to live here: it opened the lock exclusively, to see whether anyone held it, and
+# disposed what it opened. See the note at the lock below for why a check that releases what it
+# checked is not a guard.
+
+# The lock is taken in ONE step, not checked and then taken.
+#
+# The previous version asked Test-LockHeld whether the lock could be opened exclusively, disposed the
+# probe, and only then removed and recreated the file. Two recorders starting together -- which is
+# what a boot or a task restart produces -- could both pass the check, because the check releases what
+# it opened. Both then ran, and this machine had two live recorders holding the same daily NDJSON.
+# Same shape as the uv cache prune that scanned and then deleted: check-then-act is a race whenever
+# two of the same thing can start at once.
+#
+# CreateNew is the atomic part: exactly one caller can create a file that does not exist, and the
+# rest get an error. What is left is deciding whether an error means "someone is running" or "someone
+# died and left this behind", and those need different answers -- the first stands down, the second
+# takes over.
+#
+# `script:LockNote` is reported in the record either way, so the reasoning is visible rather than a
+# silent exit.
+$script:LockNote = ''
+$script:LockTaken = $false
+
+function Write-OwnerPid {
+    param($Stream)
+    $owner = [System.Text.Encoding]::UTF8.GetBytes(([string]$PID))
+    $Stream.Write($owner, 0, $owner.Length)
+    $Stream.Flush()
 }
 
-$script:HeldByOther = Test-LockHeld -Path $lockPath
-if ($script:HeldByOther) {
-    exit 0
-}
-
-# Ours to take. Remove whatever was there (stale, or empty) and create it atomically.
-Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
 try {
     $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    $owner = [System.Text.Encoding]::UTF8.GetBytes(([string]$PID))
-    $script:InstanceLock.Write($owner, 0, $owner.Length)
-    $script:InstanceLock.Flush()
-    if (-not (Get-Item -LiteralPath $lockPath).Length) {
-        $script:LockNote = 'lock created but the holder pid did not persist'
-    }
+    Write-OwnerPid $script:InstanceLock
+    $script:LockTaken = $true
 } catch {
-    # Could not take the lock at all. Fail OPEN: never let a lock failure switch off the recorder.
-    $script:LockNote = 'single-instance guard unavailable: ' + $_.Exception.Message
+    # The file exists. Who has it?
+    $holder = ''
+    for ($attempt = 0; $attempt -lt 8; $attempt++) {
+        try { $holder = ((Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop) -replace '\s', '') } catch { $holder = '' }
+        if ($holder -match '^\d+$') { break }
+        # Empty or unreadable means a recorder is between CreateNew and writing its pid. Waiting is the
+        # answer, not taking over: the boot race is exactly two recorders arriving at that instant.
+        Start-Sleep -Milliseconds 250
+    }
+
+    $holderAlive = $false
+    if ($holder -match '^\d+$') {
+        $holderAlive = [bool](Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)
+    }
+
+    if ($holderAlive -or $holder -notmatch '^\d+$') {
+        # Either a live recorder, or a file that never named one. Standing down is the safe answer for
+        # both: a recorder that does not start is visible in the record, and a second recorder holding
+        # the same file is not.
+        Write-Output "activity recorder: another instance holds the lock (holder='$holder'); standing down"
+        exit 0
+    }
+
+    # The pid it names is gone, so this is a leftover from a recorder that died.
+    try {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
+        $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        Write-OwnerPid $script:InstanceLock
+        $script:LockTaken = $true
+        $script:LockNote = "took over a stale lock left by pid $holder"
+    } catch {
+        # Fail OPEN, and only here. The recorder existing at all matters more than the guard: this
+        # project already had a day where a guard that failed closed wrote nothing and the only
+        # symptom was an empty file. A duplicate is a defect; no recorder at all is a blind spot.
+        $script:LockNote = 'single-instance guard unavailable, continuing anyway: ' + $_.Exception.Message
+    }
 }
 
 function Write-Event {
@@ -234,16 +271,36 @@ function Compare-Surface {
 # ---------------------------------------------------------------- main
 Write-Event @{ kind = 'watcher'; action = 'start'; pid = $script:SelfPid; note = 'activity recorder online' }
 
-$runBefore = Get-RunKeys
-$startupBefore = Get-StartupFiles
-$tasksBefore = Get-TaskList
-Write-Event @{ kind = 'baseline'; run = $runBefore.Count; startup = $startupBefore.Count; tasks = $tasksBefore.Count }
-
+# Subscribe FIRST, then take the baseline. The order used to be the other way round, and that left a
+# window in which a process could start and land in neither the baseline nor the event stream: the
+# snapshot was taken, the process started, and only then did the subscription begin. A process that
+# lives for less than that gap -- exactly the kind this recorder exists to catch -- was invisible
+# twice over.
+#
+# The two halves cover different things and together cover everything: a subscription catches anything
+# that starts from now on, however briefly, and the baseline catches whatever is already running.
+# Neither is complete alone, which is why the order matters rather than the effort.
+#
+# What no ordering can fix, stated rather than implied: a process that started AND exited before this
+# line is in neither. Nothing observes the past. The baseline records `subscribed` so the boundary is
+# legible in the record instead of being a matter of trust.
 Register-CimIndicationEvent -Query 'SELECT * FROM Win32_ProcessStartTrace' -SourceIdentifier VSProcStart -ErrorAction SilentlyContinue | Out-Null
 Register-CimIndicationEvent -Query 'SELECT * FROM Win32_ProcessStopTrace'  -SourceIdentifier VSProcStop  -ErrorAction SilentlyContinue | Out-Null
 
 if (-not (Get-EventSubscriber -SourceIdentifier VSProcStart -ErrorAction SilentlyContinue)) {
     Write-Event @{ kind = 'watcher'; action = 'error'; note = 'could not subscribe to process trace (needs elevation?)' }
+}
+
+$runBefore = Get-RunKeys
+$startupBefore = Get-StartupFiles
+$tasksBefore = Get-TaskList
+Write-Event @{
+    kind       = 'baseline'
+    run        = $runBefore.Count
+    startup    = $startupBefore.Count
+    tasks      = $tasksBefore.Count
+    subscribed = [bool](Get-EventSubscriber -SourceIdentifier VSProcStart -ErrorAction SilentlyContinue)
+    note       = 'taken after subscribing, so nothing falls between the two'
 }
 
 $pass = 0
