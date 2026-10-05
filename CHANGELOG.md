@@ -84,6 +84,33 @@
 
 ### Fixed
 
+- **The detector could not fire on this machine, because the rule's own subject was allowlisted.**
+  The disk policy redirects TEMP into a directory under an allowlisted volume root, and the built-in
+  allow list carries that root (`path:e:/dashaohuo/`). Both rules whose entire subject is "a
+  temporary directory" were therefore pre-approved: `ask` was always 0, which reads as "nothing to
+  report" and meant "this rule cannot fire". Zero false positives and zero true positives are
+  indistinguishable from the outside.
+  - Trust propagates down to ordinary paths; it does not propagate into a directory that exists to
+    be disposable. A high-severity finding inside a scratch directory is no longer silenced by an
+    allow entry that only covers it by covering the volume above it. An entry naming the scratch
+    directory itself, or something inside it, is a decision about it and still counts.
+  - Only high-severity findings are treated this way, deliberately. `exec-from-ephemeral` is low,
+    frequent and often innocent — builds, installers, portable tools — which is exactly what it was
+    ranked low for; a broad allow remains a reasonable answer for it. If it started asking, the rule
+    would become noise and get ignored.
+  - What would have silenced a finding is reported as `suppressedBy` rather than dropped, so
+    "detected and suppressed by an inherited allowlist" is visible as itself and not as "no finding".
+  - Measured on the machine this was extracted from: `ask` went from 0 to 1 over three days of
+    record, and the finding was real — a PyInstaller build that ran from a scratch directory and
+    cleaned itself up. That is the expected benign shape, it is rare (188 references to the build
+    directory produced one finding), and saying "that was my build" once is the workflow the custody
+    design exists for. `mode` remains `observe`, so nothing acts on it.
+
+- **`decideSignals` re-derived what `analyzeSignals` had already decided.** It called `policyAllows`
+  again and discarded the `allowed` the analysis had computed, so the suppression rule above was
+  implemented, honoured by the analysis, and then ignored by the verdict. Found by a test asserting
+  the verdict rather than the analysis — a test of the analysis would have passed.
+
 - **The MCP server reported version `1.0.0`, five releases out of date.** It was hardcoded while
   `package.json` moved on, so a client asking the server what it was got a wrong answer. The
   version is now read from the one place that declares it; the fallback is deliberately not a

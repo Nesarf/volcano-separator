@@ -766,16 +766,61 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('allowlisting turns ask into allow', v2('persist-from-ephemeral') === 'allow', v2('persist-from-ephemeral'))
   ok('allowlisting is reported, not silent', (dec2.decisions.find((d) => d.rule === 'persist-from-ephemeral') || {}).allowed != null)
 
-  // ── the defect this test found ─
-  // The machine's disk policy redirects TEMP to E:\DaShaoHuo\cache\tmp, and the built-in allow
-  // list contains `path:e:/dashaohuo/`. So the two rules whose entire subject is "a temp
-  // directory" are pre-approved on this machine and can never ask for a decision. ask was always
-  // 0 not because the machine is clean, but because the rule's target is allowlisted.
-  const realTmp = tmpdir()
-  const ctxReal = { logDir: dir, profile: 'smoke' }
-  const allowHit = g.policyAllows(g.loadPolicy(ctxReal), { path: join(realTmp, 'x.exe'), name: 'x.exe' })
-  ok('DEFECT: the real temp dir is allowlisted, so the ephemeral rules cannot fire here',
-    allowHit != null, `tmpdir=${realTmp} allowHit=${allowHit}`)
+  // ── the defect this test found, and the rule that fixes it ─
+  // The machine's disk policy redirects TEMP into a directory under an allowlisted volume root, so
+  // both rules whose entire subject is "a temporary directory" were pre-approved and could never
+  // ask. `ask` was always 0, which reads as "nothing to report" and meant "the rule cannot fire".
+  //
+  // Asserted through analyzeSignals rather than through policyAllows, because the raw match is
+  // still broad and always will be -- what changed is whether a broad match may silence a
+  // high-severity finding. A test of the matcher alone would have passed both before and after.
+  const BS2 = String.fromCharCode(92)
+  const wideScratch = join(tmpdir(), 'volcano-scratch')
+  const wideRealTmp = join(wideScratch, 'payload.exe')
+  writeFileSync(join(act, 'activity-2026-01-02.ndjson'),
+    [
+      { t: now, kind: 'persist', surface: 'RunKeys', action: 'added', name: 'evil', value: wideRealTmp },
+      { t: now, kind: 'proc-start', pid: 9101, ppid: 1, name: 'payload.exe', cmd: '"' + wideRealTmp + '"' },
+    ].map((r) => JSON.stringify(r)).join(String.fromCharCode(10)) + String.fromCharCode(10))
+
+  const wideAllow = join(dir, 'wide-policy.json')
+  // A broad entry: the grandparent of the scratch root, which is the shape the built-in list
+  // uses for a volume (path:e:/dashaohuo/). Derived rather than hardcoded so this holds on a
+  // machine whose TEMP lives somewhere else -- an earlier version of this test used the home
+  // directory, which on this machine is on a different drive and therefore matched nothing at
+  // all. That made 'no longer silenced' pass for the wrong reason: no match, not no suppression.
+  const wideAncestor = dirname(dirname(tmpdir())).toLowerCase().split(BS2).join('/')
+  writeFileSync(wideAllow, JSON.stringify({ mode: 'observe', allow: ['path:' + wideAncestor + '/'] }))
+  const ctxWide = { logDir: dir, profile: 'smoke', policyFile: wideAllow }
+
+  const wideSig = g.analyzeSignals(ctxWide, { sinceMinutes: 60 })
+  const isWide = (f) => f.rule === 'persist-from-ephemeral' && String(f.path || '').includes('volcano-scratch')
+  const persistWide = wideSig.findings.find(isWide)
+  ok('a broad allow no longer silences a high-severity ephemeral finding',
+    persistWide && persistWide.allowed === null, JSON.stringify(persistWide && persistWide.allowed))
+  ok('what would have silenced it is reported rather than dropped away',
+    persistWide && persistWide.suppressedBy != null, JSON.stringify(persistWide && persistWide.suppressedBy))
+
+  const wideDec = g.decideSignals(ctxWide, { sinceMinutes: 60 })
+  const wideVerdict = (wideDec.decisions.find(isWide) || {}).verdict
+  ok('so the high finding can finally ask for a human', wideVerdict === 'ask', JSON.stringify(wideVerdict))
+
+  // The low-severity half must keep its quiet: exec-from-ephemeral fires constantly from builds and
+  // installers, which is what it was ranked low for. If it starts asking, the rule is noise.
+  const execWide = wideSig.findings.find((f) => f.rule === 'exec-from-ephemeral' && String(f.path || '').includes('volcano-scratch'))
+  ok('a broad allow still silences the low-severity ephemeral rule',
+    execWide && execWide.allowed != null, 'exec-from-ephemeral stopped being allowlisted')
+
+  // An allow entry naming the scratch directory itself is a decision about it, and must still work.
+  const specificAllow = join(dir, 'specific-policy.json')
+  writeFileSync(specificAllow, JSON.stringify({
+    mode: 'observe',
+    allow: ['path:' + wideScratch.toLowerCase().split(BS2).join('/') + '/'],
+  }))
+  const ctxSpecific = { logDir: dir, profile: 'smoke', policyFile: specificAllow }
+  const specVerdict = (g.decideSignals(ctxSpecific, { sinceMinutes: 60 })
+    .decisions.find(isWide) || {}).verdict
+  ok('an allow entry naming the scratch directory still silences it', specVerdict === 'allow', JSON.stringify(specVerdict))
 
   rmSync(dir, { recursive: true, force: true })
 }
