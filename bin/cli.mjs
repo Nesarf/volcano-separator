@@ -105,6 +105,7 @@ Commands:
                      reach into a process already running from it -- use detain for those.
   restore <journal>  put an isolated file's original ACL back
   isolated           what this tool has isolated and not undone
+  evidence           what a mode other than observe would have done, per day, accumulated
   release <pid>                                   resume a detained process
   detained [--no-probe] [--no-scan]               what is under custody now, checked against the
                                                   live system, plus anything frozen with no
@@ -258,6 +259,12 @@ async function main() {
           // Adding the missing field fixes that instance. Spreading fixes the class: a field added
           // to decideSignals now reaches the log because nothing has to remember to name it.
           sig = { ...d, ask: d.byVerdict.ask, fresh: rec.written }
+          // Rolled up daily into a durable file, because the activity record lives under the log
+          // directory -- which defaults to the system temp directory, where this machine's disk
+          // hygiene tooling removes files after seven days with no exclusion list. Asking a rule to
+          // prove itself over a longer window than its evidence survives fails quietly, and it fails
+          // by showing FEWER findings, which reads as good news.
+          g.rollUpEvidence(ctx, d, { newlyRecorded: rec.written })
         } catch (e) {
           // A signal-layer failure must never make the service heartbeat look broken.
           sig = { error: String(e?.message ?? e) }
@@ -603,6 +610,26 @@ async function main() {
       console.log(`  custody window  ${r.custody ? 'open -- it belongs to us, the target cannot close it' : 'not opened'}`)
       console.log('')
       console.log(C.dim('  the window offers ALLOW (records your decision) or RELEASE (just resumes it)'))
+      break
+    }
+
+    case 'evidence': {
+      const days = g.readEvidence()
+      if (opts.json) return emit({ ok: true, days })
+      if (!days.length) {
+        console.log('no evidence yet: the heartbeat rolls up one line a day')
+        console.log(C.dim('  it starts accumulating the first time the watchdog task runs with --signals'))
+        break
+      }
+      console.log(`evidence for a promotion decision -- ${days.length} day(s)`)
+      console.log('')
+      const total = days.reduce((n, d) => n + (d.actionable ?? 0), 0)
+      for (const d of days) {
+        console.log(`  ${String(d.day).padEnd(12)} would act ${String(d.actionable ?? 0).padStart(4)}   (${d.total ?? 0} finding(s) in the last window, mode ${d.mode ?? '?'})`)
+      }
+      console.log('')
+      console.log(`  ${total} time(s) in ${days.length} day(s) -- a mode other than observe would have acted that often`)
+      console.log(C.dim('  DESIGN-enforcement.md will not promote a rule until this is a sample, not a number'))
       break
     }
 

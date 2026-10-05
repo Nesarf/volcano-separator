@@ -1681,6 +1681,48 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     fmt({}) === 'would:?', `${fmt({})} -- a missing field would silently become a measurement`)
 }
 
+// ── the evidence has to outlive the log it was derived from ─
+// The activity record lives under the log directory, which defaults to the system temp directory --
+// and this machine's disk hygiene tooling removes files there after seven days, recursively, with no
+// exclusion list. Asking a rule to prove itself over a longer window than its evidence survives fails
+// quietly, and it fails by showing FEWER findings, which reads as good news.
+//
+// The other half of the same lesson: the first version of this roll-up wrote the six-minute window's
+// count, and findings are rare -- so it would have written 0 nearly every day. A daily record of
+// zeroes is a counter that cannot vary, arrived at by a different route.
+{
+  section('durable evidence')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+  const d = g.decideSignals(ctx, { sinceMinutes: 6 })
+
+  // It goes beside the policy, not under the log directory. That is the whole point.
+  const before = g.readEvidence().length
+  const r = g.rollUpEvidence(ctx, d, { newlyRecorded: 0 })
+  ok('the roll-up writes somewhere', r.ok === true, JSON.stringify(r.detail ?? r.file))
+  ok('and that somewhere is the durable directory, not the log directory',
+    r.ok && !String(r.file).includes(String(process.env.TEMP ?? 'x')) && /\.volcano-separator/.test(String(r.file)),
+    String(r.file))
+
+  // Signed increments accumulate. This is what makes it a sample rather than a snapshot.
+  const a = g.rollUpEvidence(ctx, d, { newlyRecorded: 5 })
+  const b = g.rollUpEvidence(ctx, d, { newlyRecorded: 2 })
+  ok('increments accumulate into a running total for the day',
+    a.ok && b.ok && b.actionableToday === a.actionableToday + 2,
+    `${a.actionableToday} -> ${b.actionableToday}`)
+
+  // And it stays one line per day however often the heartbeat runs.
+  const lines = g.readEvidence().filter((e) => e.day === new Date().toISOString().slice(0, 10))
+  ok('a day appears exactly once however often the heartbeat runs', lines.length === 1, `${lines.length} line(s) today`)
+  ok('no day is lost by the rewrite', g.readEvidence().length >= before, `${before} -> ${g.readEvidence().length}`)
+
+  // An increment of zero must not reset the day.
+  const c = g.rollUpEvidence(ctx, d, { newlyRecorded: 0 })
+  ok('a quiet window does not reset the day', c.actionableToday === b.actionableToday, `${b.actionableToday} -> ${c.actionableToday}`)
+
+  rmSync(join(homedir(), '.volcano-separator', 'evidence.ndjson'), { force: true })
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

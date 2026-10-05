@@ -130,6 +130,13 @@ than an impression:
 | zero findings on a longer, quieter window | an action taken during a quiet period is the one nobody is watching for |
 | the action was undone at least once, successfully | an undo path that has never run is a hypothesis |
 
+**Where the evidence lives matters as much as collecting it.** The activity record is under the log
+directory, which defaults to the system temp directory, and this machine's disk hygiene tooling
+removes files there after seven days. A rule asked to prove itself over fourteen days, with its
+evidence deleted on the seventh, fails by reporting *fewer* findings -- which reads as good news.
+The heartbeat therefore rolls a daily running total into `~/.volcano-separator/evidence.ndjson`,
+beside the policy, and `volcano-separator evidence` prints it.
+
 The thresholds are deliberately not fixed here. They should be chosen after the first month of `ask`
 data, and **the current traffic is far too thin to choose them now**: over the 72 hours on record,
 `decide` reports 4 asks against 16 allows. Four is not a sample.

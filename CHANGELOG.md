@@ -19,6 +19,24 @@
 
 ### Added
 
+- **`evidence` -- the counterfactual, accumulated where a cache cleaner will not reach it.** This
+  came out of checking whether stage 0's data would actually pile up, and it would not have. The
+  activity record lives under the log directory, which defaults to the system temp directory, and
+  this machine's disk hygiene tooling is configured to remove files there after seven days,
+  recursively, with no exclusion list. **Asking a rule to prove itself over a longer window than its
+  evidence survives is a plan that fails quietly -- and it fails by showing fewer findings, which
+  reads as good news.**
+  - The heartbeat now rolls the counterfactual up once a day into `~/.volcano-separator/evidence.ndjson`,
+    beside the policy, for the same reason the isolation journal is there: deciding is a decision
+    about this machine, not an artifact of running a tool.
+  - **The daily line is a running total, not the window's count.** The heartbeat looks at six minutes
+    and findings are rare (four in three days), so writing each window's number would have written 0
+    nearly every day -- a daily record of zeroes is a counter that cannot vary, reached by a
+    different route.
+  - `volcano-separator evidence` prints the days and the total.
+
+### Security
+
 - **The trigger, with nothing attached to it** (stage 0 of `DESIGN-enforcement.md`). `wouldAct` has
   been computed by `decideSignals` since that layer was written and read by nothing, which is the
   correct state until a promotion decision has a number to look at -- and an unread count is not
