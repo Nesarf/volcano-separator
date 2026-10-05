@@ -1898,6 +1898,57 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   }
 }
 
+// ── a policy that cannot be read is not the default policy ─
+// `catch { raw = {} }` turned a corrupt policy into the built-in defaults, silently. The defaults are
+// the safe direction -- observe, empty allowlist -- so nothing dangerous followed, and that is exactly
+// why it went unnoticed: a corrupted file produced a working tool with a policy nobody chose. The rule
+// this project keeps invoking is that unknown is not zero; here unknown was being read as consent.
+{
+  section('policy integrity')
+  const g = await import('../lib/core.mjs')
+  const base = g.resolveContext({})
+  const dir = join(tmpdir(), 'vsep-policy-' + process.pid)
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, 'policy.json')
+  const ctx = { ...base, policyFile: file }
+
+  rmSync(file, { force: true })
+  const missing = g.loadPolicy(ctx)
+  ok('a missing file is reported as absent, not as invalid',
+    missing.integrity === 'absent' && missing.verified === true, JSON.stringify(missing.integrity))
+
+  const w = g.savePolicy(ctx, { mode: 'reject', allow: ['name:thing.exe'] })
+  ok('a policy can be saved', w.ok === true, JSON.stringify(w.detail))
+  const good = g.loadPolicy(ctx)
+  ok('and read back as ok', good.integrity === 'ok' && good.mode === 'reject', JSON.stringify({ i: good.integrity, m: good.mode }))
+
+  // The write is atomic. A half-written policy is precisely the corrupt state this reports, so the
+  // save must not be able to produce it: a temp file beside it, then a rename.
+  ok('the save does not leave a temporary file behind', !existsSync(file + '.tmp'), 'a .tmp survived the save')
+
+  writeFileSync(file, '{"mode": "reject", not json at all')
+  const broken = g.loadPolicy(ctx)
+  ok('a corrupt file is reported as invalid, not as the default',
+    broken.integrity === 'invalid' && broken.verified === false, JSON.stringify(broken.integrity))
+  ok('and it says why', typeof broken.parseError === 'string' && broken.parseError.length > 5, String(broken.parseError))
+  ok('and it still falls back to something safe rather than refusing to run',
+    broken.mode === 'observe', broken.mode)
+  ok('but it does not claim that fallback is the user\'s choice', broken.verified === false, 'verified stayed true')
+
+  // An array is valid JSON and not a policy; that has to be caught too, or it spreads into nonsense.
+  writeFileSync(file, '[1,2,3]')
+  const arr = g.loadPolicy(ctx)
+  ok('a JSON array is rejected as a policy rather than spread into one',
+    arr.integrity === 'invalid' && arr.mode === 'observe', JSON.stringify({ i: arr.integrity, m: arr.mode }))
+
+  // A policy cannot declare its own integrity.
+  writeFileSync(file, JSON.stringify({ mode: 'observe', integrity: 'ok', verified: true }))
+  const selfClaim = g.loadPolicy(ctx)
+  ok('a policy file cannot claim its own integrity', selfClaim.integrity === 'ok', selfClaim.integrity)
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

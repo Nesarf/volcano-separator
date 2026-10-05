@@ -542,6 +542,17 @@ async function main() {
       const st = g.readStealth(ctx, { limit: 15 })
       if (opts.json) return emit({ ...pol, stealth: st })
       console.log(`policy: ${pol.file}`)
+      // A policy that could not be read is not the default policy. It used to be reported as
+      // one: same output, same green, while the file on disk said something nobody had chosen.
+      if (pol.integrity === 'invalid') {
+        console.log('')
+        console.log(C.red('  POLICY UNVERIFIED') + ' -- the file exists and could not be parsed')
+        console.log(C.dim('    ' + String(pol.parseError ?? '').slice(0, 100)))
+        console.log(C.dim('    everything below is the built-in default, not what this file says.'))
+        console.log(C.dim('    the switch is not to observe because you chose it; it is observe because we could not read your choice.'))
+      } else if (pol.integrity === 'absent') {
+        console.log(C.dim('  no file yet: these are the built-in defaults'))
+      }
       console.log('')
       console.log(`  mode         ${pol.mode === 'observe' ? C.green(pol.mode) : C.red(pol.mode)}`)
       console.log(`  grace        ${pol.graceSeconds}s (a window hidden for less than this is not stealth)`)

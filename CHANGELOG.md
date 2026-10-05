@@ -55,6 +55,24 @@
   - Fifteen checks, including the byte-for-byte comparison and that a refusal leaves the ciphertext
     intact.
 
+### Fixed
+
+- **A policy that cannot be read is no longer reported as the default policy.** `catch { raw = {} }`
+  turned a corrupt `policy.json` into the built-in defaults, silently. The defaults are the safe
+  direction -- observe, empty allowlist -- so nothing dangerous followed, and that is exactly why it
+  went unnoticed: a corrupted file produced a working tool with a policy nobody had chosen. The rule
+  this project keeps invoking is that unknown is not zero; here unknown was being read as consent.
+  - `loadPolicy` now distinguishes `absent` (no file yet, defaults are correct), `ok`, and `invalid`
+    (the file exists and could not be parsed), and carries the parse error.
+  - `policy show` prints `POLICY UNVERIFIED` with the reason and the sentence that matters: *the
+    switch is not to observe because you chose it; it is observe because we could not read your
+    choice.*
+  - A JSON array is rejected as a policy rather than spread into one, and a policy file cannot claim
+    its own integrity.
+- **`savePolicy` writes atomically.** It wrote the file in place, so a power loss or a killed process
+  could leave a half-written policy -- which is precisely the corrupt state above. It now writes
+  beside and renames, and a rename within a directory is atomic.
+
 ### Security
 
 - **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known
