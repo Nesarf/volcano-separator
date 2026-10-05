@@ -248,7 +248,16 @@ async function main() {
         try {
           const d = g.decideSignals(ctx, { sinceMinutes: 6 })
           const rec = g.recordDecisions(ctx, d.decisions)
-          sig = { total: d.total, ask: d.byVerdict.ask, fresh: rec.written }
+          // Spread, not a hand-written list of fields.
+          //
+          // The first version named three fields and omitted `actionable`, so `would:` would have
+          // read 0 for ever -- a number that can only ever say "nothing would be acted on",
+          // presented as the evidence a promotion decision gets made from. A count that cannot vary
+          // is not a measurement, and it is the most convincing kind of wrong.
+          //
+          // Adding the missing field fixes that instance. Spreading fixes the class: a field added
+          // to decideSignals now reaches the log because nothing has to remember to name it.
+          sig = { ...d, ask: d.byVerdict.ask, fresh: rec.written }
         } catch (e) {
           // A signal-layer failure must never make the service heartbeat look broken.
           sig = { error: String(e?.message ?? e) }
@@ -293,7 +302,12 @@ async function main() {
           `${new Date().toISOString()}  ${verdict.padEnd(18)} ${String(Date.now() - t0).padStart(6)}ms  ` +
             `uv=${ctx.uvx ? 'y' : 'n'} profile=${ctx.profile} ` +
             `${r.steps?.length ? '| ' + r.steps.map((st) => st.step).join('>') : ''}` +
-            `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh + '/would:' + (sig.actionable ?? 0)) : ''}` +
+            // `?? 0` would make a missing field look like a measured zero, and this is exactly the
+            // field where that matters: `would:` is the evidence a promotion decision gets made from,
+            // and a count that can only ever say "nothing" is the most convincing kind of wrong. A
+            // missing field says `?`, so the log itself reports that it does not know -- the same
+            // rule the daemon's /health was fixed to follow.
+            `${sig ? ' | signals=' + (sig.error ? 'ERROR' : 'ask:' + sig.ask + '/new:' + sig.fresh + '/would:' + (Number.isInteger(sig.actionable) ? sig.actionable : '?')) : ''}` +
             `${cus ? (cus.error
                 ? ' | custody=ERROR'
                 : ' | custody=' + (cus.released ? 'RELEASED(' + cus.released + ')'

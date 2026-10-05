@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The heartbeat's counterfactual could not have been anything but zero.** Stage 0's whole point is
+  that a promotion decision gets made from a number, and the number it was about to record was
+  built from a hand-written list of fields that omitted `actionable` -- so `would:` would have read
+  0 for ever. A count that can only ever say *nothing would be acted on* is not a measurement, and
+  it is the most convincing kind of wrong, because it agrees with exactly what a quiet machine looks
+  like.
+  - The object is now a spread rather than a list, so a field added to `decideSignals` reaches the
+    log because nothing has to remember to name it.
+  - And `?? 0` is gone. A missing field now logs `would:?`, because defaulting it to zero turns *I do
+    not know* into *none*, which is the same failure the daemon's `/health` was fixed to stop
+    reporting. **Verified by deleting `actionable` and watching `would:?` appear**, then restoring it
+    and watching `would:0` come back -- a guard that has never fired is a hypothesis.
+
 ### Added
 
 - **The trigger, with nothing attached to it** (stage 0 of `DESIGN-enforcement.md`). `wouldAct` has

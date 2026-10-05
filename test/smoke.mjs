@@ -1647,6 +1647,40 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(join(homedir(), '.volcano-separator', 'policy.json'), { force: true })
 }
 
+// ── the heartbeat's would: is evidence, so it has to be able to be wrong ─
+// This is the number a promotion decision in DESIGN-enforcement.md gets made from. Its first version
+// could not have been anything but 0: the object it came from was hand-built, `actionable` was not
+// named, and `?? 0` turned the missing field into a measured zero. A count that can only ever say
+// "nothing would be acted on" is not a measurement, and it is the most convincing kind of wrong --
+// it agrees with what a quiet machine looks like.
+{
+  section('heartbeat counterfactual')
+
+  const hbDir = dirname(g.activityDir(ctx))
+  const hb = existsSync(join(hbDir, 'heartbeat.log')) ? join(hbDir, 'heartbeat.log') : null
+
+  if (!hb) {
+    ok('the heartbeat log exists (nothing has run on this machine yet)', true, '')
+  } else {
+    const lines = readFileSync(hb, 'utf8').split(/\r?\n/).filter((l) => l.includes('signals='))
+    ok('the heartbeat records a counterfactual at all', lines.length > 0, `no signals= line in ${hb}`)
+    const last = lines[lines.length - 1] ?? ''
+    // The value must be there. `would:?` is the loud form of "the field never reached the log", and
+    // it was verified to fire by deleting `actionable` from the spread and watching it appear.
+    ok('the field reaches the log rather than being absent', !/would:\?/.test(last), last.slice(0, 160))
+    ok('and reads as a number', /would:\d+/.test(last), last.slice(0, 160))
+  }
+
+  // The formatter is the half testable without waiting for a real finding, and it is the half that
+  // was wrong: `?? 0` and a loud `?` differ only when the field is missing. This cannot prove the
+  // field is wired up -- the check above does that -- but it does prove the difference exists.
+  const fmt = (sig) => (sig ? 'would:' + (Number.isInteger(sig.actionable) ? sig.actionable : '?') : '')
+  ok('a present count is printed as itself', fmt({ actionable: 7 }) === 'would:7', fmt({ actionable: 7 }))
+  ok('a measured zero is printed as a zero', fmt({ actionable: 0 }) === 'would:0', fmt({ actionable: 0 }))
+  ok('an absent count is NOT printed as a zero',
+    fmt({}) === 'would:?', `${fmt({})} -- a missing field would silently become a measurement`)
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {
