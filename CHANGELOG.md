@@ -66,6 +66,13 @@
 
 ### Fixed
 
+- **The MCP server reported version `1.0.0`, five releases out of date.** It was hardcoded while
+  `package.json` moved on, so a client asking the server what it was got a wrong answer. The
+  version is now read from the one place that declares it; the fallback is deliberately not a
+  plausible version number, because naming a release that does not exist is worse than saying the
+  file could not be read. Checked by actually performing the `initialize` handshake rather than by
+  grepping the source, since a grep passes on any rewrite that keeps the same shape.
+
 - **`cache --apply` staged every removal by rename, closing a race the in-use scan could not.**
   The scan of running processes and the `rmSync` that followed were not atomic, so a process that
   started using an entry in between was not protected at all -- and a recursive `rmSync` can delete

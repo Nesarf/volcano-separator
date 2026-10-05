@@ -10,7 +10,7 @@
  * Run: node test/smoke.mjs
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -937,6 +937,43 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     threw ? `threw ${threw}` : JSON.stringify(res && res.refused))
 
   rmSync(base, { recursive: true, force: true })
+}
+
+// ── the MCP server reports its real version ─
+// The version was hardcoded to '1.0.0' and stayed there through five releases, so a client asking
+// the server what it was got an answer five versions out of date. Checked by actually handshaking
+// rather than by grepping the source for a string, because a grep would pass on any rewrite that
+// keeps the same shape.
+{
+  section('mcp server version')
+  const pkgVersion = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8')).version
+  const child = spawn(process.execPath, [join(projectDir, 'lib', 'mcp.mjs')], { stdio: ['pipe', 'pipe', 'pipe'] })
+  let out = ''
+  child.stdout.on('data', (b) => { out += b.toString() })
+  child.stdin.write(JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'smoke', version: '0' } },
+  }) + '\n')
+  const deadline = Date.now() + 15000
+  while (Date.now() < deadline && !out.includes('serverInfo')) {
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  child.kill()
+  let info = null
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const msg = JSON.parse(line)
+      if (msg?.result?.serverInfo) info = msg.result.serverInfo
+    } catch { /* not a complete frame yet */ }
+  }
+  ok('mcp answers an initialize handshake', info !== null, out.slice(0, 120))
+  if (info) {
+    ok('mcp reports the version package.json declares', info.version === pkgVersion,
+      `mcp=${info.version} package=${pkgVersion}`)
+    ok('mcp does not claim a version that does not exist', !/^1\.0\.0$/.test(info.version) || pkgVersion === '1.0.0',
+      `version=${info.version}`)
+  }
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
