@@ -37,6 +37,12 @@
     -- which is the same path the Node side derives *only when `logDir` is unset*. With any log
     directory override the summary was written to one place and looked for in another, and a freeze
     that had worked perfectly read as "detain produced no summary". `isolate.ps1` already declared it.
+- **The reader forwarded only some of the counters the recorder publishes.** `eventsAccepted` was
+  written by the recorder and dropped by `readRecorderHealth`, so `ps` printed `?` for it -- which
+  reads as "this recorder does not publish that field" rather than "the reader lost it", and the
+  feature looked unimplemented while it had been working all along. A field the writer emits and the
+  reader drops is invisible in the worst direction. Every published counter is now forwarded and a
+  test fails if one is not; that test rewrites the snapshot the earlier checks read, so it runs last.
 - **A last line with no readable timestamp printed "Infinity min old".** That is not a measurement, it
   is a number-shaped absence. The usual cause is a writer killed mid-line, which the message now says.
 - **Everything periodic only ran when something had happened.** The window sampler, the persistence

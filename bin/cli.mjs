@@ -363,15 +363,20 @@ async function main() {
       console.log(`  recorder   ${rec.ok ? C.green('on  ') : C.yellow('off ')}  ${rec.detail}`)
       if (rec.health?.known) {
         const h = rec.health
-        const lost = h.eventsDropped > 0 ? C.red(`${h.eventsDropped} lost`) : `${h.eventsDropped} lost`
-        const errs = h.handlerErrors > 0 ? C.red(`${h.handlerErrors} handler error(s)`) : `${h.handlerErrors} handler error(s)`
+        const n0 = (v) => (Number.isFinite(v) ? String(v) : '?')
+        const lost = h.eventsDropped > 0 ? C.red(`${h.eventsDropped} lost`) : `${n0(h.eventsDropped)} lost`
+        const errs = h.handlerErrors > 0 ? C.red(`${h.handlerErrors} handler error(s)`) : `${n0(h.handlerErrors)} handler error(s)`
         // An equation that does not hold is worse than no equation. `written` also counts rows from
         // outside the event stream (the watcher's own start, the baseline), so asserting that the
         // parts sum to `seen` -- as an earlier version did -- printed arithmetic that was visibly
         // wrong. The counters are listed, not made to add up.
+        // A field a slightly older recorder does not publish reads as `?`, not as `undefined`: a
+        // missing number and a zero are different answers, which is the rule the heartbeat's
+        // counterfactual was fixed to follow.
+        const n = n0
         console.log(C.dim(`             pid ${h.pid}, up ${h.uptimeSeconds}s, ${h.passes} pass(es); ` +
-          `events: ${h.eventsSeen} seen, ${h.eventsDuplicate} repeat(s), ${h.eventsSelf} own, ` +
-          `${h.eventsAccepted} distinct -> ${h.eventsWritten} row(s) written; ${lost}, ${errs}`))
+          `events: ${n(h.eventsSeen)} seen, ${n(h.eventsDuplicate)} repeat(s), ${n(h.eventsSelf)} own, ` +
+          `${n(h.eventsAccepted)} distinct -> ${n(h.eventsWritten)} row(s) written; ${lost}, ${errs}`))
         if (h.lockNote) console.log(C.yellow(`             ${h.lockNote}`))
       } else if (rec.health) {
         console.log(C.dim(`             ${rec.health.detail}`))

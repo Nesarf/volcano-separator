@@ -2262,6 +2262,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('and the handler errors separately, because they are a different failure',
     h.handlerErrors === 2, JSON.stringify(h))
 
+
   // The probe must fold that into its verdict: seen != written is not the same as stopped. It needs a
   // record to be there at all -- "no record" is a different verdict, and it is the right one to give
   // when there is nothing to read.
@@ -2300,6 +2301,22 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   const broken = g.readRecorderHealth(ctx)
   ok('a corrupt snapshot is reported as unreadable rather than assumed fine',
     broken.known === false && /could not be read/.test(broken.detail), JSON.stringify(broken))
+
+  // Every counter the recorder publishes must come back out of the reader. A field the writer emits
+  // and the reader drops is invisible in the worst way: the panel prints `?`, which reads as "this
+  // recorder does not publish that" -- and `eventsAccepted` looked unimplemented for exactly that
+  // reason while the recorder had been writing it all along.
+  {
+    const published = { eventsSeen: 1, eventsSelf: 2, eventsDuplicate: 3, eventsAccepted: 4,
+                        batches: 5, eventsInBatch: 6, maxBatch: 7, eventsWritten: 8,
+                        eventsDropped: 9, handlerErrors: 10, passes: 11, iterations: 12 }
+    writeFileSync(join(act, 'recorder-health.json'),
+      JSON.stringify({ pid: 1, t: now.toISOString(), ...published }))
+    const r = g.readRecorderHealth(ctx)
+    const dropped = Object.keys(published).filter((k) => r[k] !== published[k])
+    ok('the reader forwards every counter the recorder publishes',
+      dropped.length === 0, `not forwarded: ${dropped.join(', ')}`)
+  }
 
   rmSync(dir, { recursive: true, force: true })
 }
