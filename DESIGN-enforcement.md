@@ -1,8 +1,9 @@
 # Enforcement: isolation and in-place encryption
 
 **Status: stages 0 and 1 built (`decide` reports the counterfactual; `isolate` / `restore` /
-`isolated` exist and their undo is authenticated).**
-Stages 0, 2 and 3 are not built, and the decisions in section 9 are recorded but not yet acted on.
+`isolated` and `encrypt` / `decrypt` / `encrypted` exist, and their undo is authenticated).**
+Stages 2 and 3 are not built. Of the decisions in section 9, the first three have been acted on and
+the fourth still stands (nothing acts unattended).
 
 The tool today records, names and asks. It cannot prevent anything. That gap is real and it is the
 last thing standing between what this is and what it was meant to be. It is also the half where a
@@ -222,10 +223,20 @@ heartbeat reports when a rule *would* have acted, had `policy.mode` been anythin
 and does nothing. This costs
 nothing to build and produces the data every later decision depends on.
 
-**Stage 1 — a second enforcement path, still manual. BUILT, for isolation only.** `isolate <path|pid>`,
-`restore <journal>` and `isolated`, each typed by a human, with the journal and the undo, and no
-automatic caller. `encrypt` is not built. The undo path has been exercised on real files, which is
-what this stage exists for.
+**Stage 1 — enforcement paths that a human types. BUILT: two of them.** Every command here is typed
+by a person, has a journal and an undo, and has **no automatic caller**:
+
+| Action | Commands | Touches the target how |
+|---|---|---|
+| ACL isolation | `isolate <path\|pid>`, `restore <journal>`, `isolated` | rewrites the ACL; bytes untouched |
+| In-place encryption | `encrypt <path>`, `decrypt <journal>`, `encrypted` | rewrites the bytes, in place |
+
+Correction (2026-10-06): this section used to say "BUILT, for isolation only. `encrypt` is not
+built." That was true when it was written and stopped being true when `crypt.mjs` landed. It is
+recorded as a correction rather than quietly edited because the sentence is the kind a reader acts
+on -- someone deciding whether encryption exists would have read it and concluded it did not.
+
+The undo path has been exercised on real files for both actions, which is what this stage exists for.
 
 **Stage 2 — an action becomes reachable per rule.** After the gate in 4.2, and for one rule at a
 time, `policy.mode` may be set to something other than `observe`.
@@ -242,7 +253,7 @@ code that follows is shaped by them.
 
 | Question | Decision | Consequence |
 |---|---|---|
-| Which capability first? | **ACL isolation** | built; encryption remains unbuilt |
+| Which capability first? | **ACL isolation** | built, and encryption was built after it -- see the correction in section 8 |
 | Where does the key live? | **bound to the machine and the user** (DPAPI) | applies to the journal today, and to encryption when it exists |
 | What is the intended target? | **as system-level as possible** | `%ProgramFiles%` and service binaries are reachable; `%SystemRoot%` needs an explicit acknowledgement |
 | Is any non-`observe` mode ever unattended? | **deferred** | nothing reads `policy.mode` yet, and that stays true |
@@ -276,11 +287,28 @@ Three protections were added because system-level reach is what makes them neces
    "run code as this user on this machine". It does not stop the second thing -- anyone who can do
    that can call DPAPI too. What it does stop is the cheap versions: a journal copied from
    elsewhere, a hand-written one, a backup swapped for another, a plausible-looking edit.
-## 10. What I would build first
 
-**Stage 0, and nothing else.** It is small, it is safe, it produces the evidence that every later
-stage is conditional on, and it can be thrown away without loss if the answer turns out to be that
-this tool should never act automatically.
+## 10. What to build first
 
-The thing I would refuse to build first is encryption with an automatic caller. That combination has
-no failure mode that is merely inconvenient.
+This section used to say "**Stage 0, and nothing else**". Stage 0 and Stage 1 have since been built, so
+the sentence had become a description of the past rather than a plan -- and it read as though nothing
+beyond Stage 0 were permitted, which was never the intent. The sequencing rule it was reaching for is
+narrower and still holds:
+
+**Capability is built as far as a human typing it, and no further, until 4.2 is satisfied.** Stage 1
+may grow new operations -- vault, hold, whatever the next one is -- because a person typing a command
+is the human in the loop, and the gate in 4.2 governs **promotion to automatic**, not the existence of
+the operation. What may not happen without the gate is a rule invoking it.
+
+The thing to refuse to build, and the reason 4.2 exists, is **any action with an automatic caller
+before there is a measured rate**: an automatic caller turns one wrong judgement into every matching
+file, before anyone looks.
+
+Two things a new Stage 1 operation must carry, both of which the existing two have:
+
+1. **An undo that does not depend on this tool.** `isolate` stores its ACL with `icacls /save` and
+   prints the `/restore` command on every result. Its restore was verified by deleting the journal
+   entirely and restoring by hand.
+2. **A boundary statement scoped to what it actually does.** `isolate` does not rewrite bytes;
+   `encrypt` does. They cannot share a sentence, and a new operation that moves a file cannot share
+   either of theirs.
