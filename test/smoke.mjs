@@ -2187,6 +2187,124 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 }
 
 
+// ── no screen may promise enforcement the tool cannot perform ─
+// The same false claim was written in three places at three different times: `policy mode reject`
+// said "will be TERMINATED", `decide` said "enforcement is ON", and `signals` went on saying it for a
+// screen after `decide` had been corrected. Every one was caught by a person reading the output, and
+// a claim that lives in output is exactly the kind a test can hold down.
+//
+// Asserted over the source rather than by running each command, because the strings are the artefact:
+// a mode that nothing reads must not be described anywhere as if something does.
+{
+  section('no screen promises what the tool cannot do')
+  // Comments are stripped first. All three phrases appear in this file as commentary recording that
+  // they used to be printed -- which is the opposite of printing them, and a check that cannot tell
+  // those apart fails on the fix it is meant to protect. The scanner is lifted out of the module
+  // surface section above, which already needs it for the same reason.
+  const stripComments = (src) => {
+    const BS = String.fromCharCode(92)
+    let out = ''
+    let i = 0
+    let prev = ''
+    while (i < src.length) {
+      const c = src[i]
+      const n = src[i + 1]
+      if (c === '/' && n === '/') {
+        const e = src.indexOf(String.fromCharCode(10), i)
+        i = e === -1 ? src.length : e
+        continue
+      }
+      if (c === '/' && n === '*') {
+        const e = src.indexOf('*' + '/', i + 2)
+        i = e === -1 ? src.length : e + 2
+        continue
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        const quote = c
+        out += c
+        i++
+        while (i < src.length) {
+          if (src[i] === BS) { out += src[i] + (src[i + 1] ?? ''); i += 2; continue }
+          out += src[i]
+          if (src[i] === quote) { i++; break }
+          i++
+        }
+        continue
+      }
+      out += c
+      prev = c
+      i++
+    }
+    void prev
+    return out
+  }
+
+  const src = stripComments(readFileSync(join(projectDir, 'bin', 'cli.mjs'), 'utf8'))
+  const lib = ['signals.mjs', 'policy.mjs', 'mcp.mjs']
+    .map((f) => stripComments(readFileSync(join(projectDir, 'lib', f), 'utf8')))
+    .join(String.fromCharCode(10))
+
+  // Phrases that assert an action is happening. `would have acted` and `would do` are fine and are
+  // how the counterfactual is supposed to read; what must not appear is the plain present tense.
+  const claims = [
+    'enforcement is ON',
+    'will be TERMINATED',
+    'enforcement is enabled',
+  ]
+  for (const claim of claims) {
+    ok(`nothing in the CLI claims "${claim}"`, !src.includes(claim), `found in bin/cli.mjs`)
+  }
+
+  // The one place a non-observe mode is described must say that it is recorded and unread.
+  ok('a non-observe mode is described as recorded intent',
+    src.includes('recorded intent; nothing reads it yet'),
+    'the honest phrasing is gone from the CLI')
+  ok('and at least two screens use it, because the claim appeared on more than one',
+    (src.split('recorded intent; nothing reads it yet').length - 1) >= 2,
+    'fewer than two screens describe a non-observe mode honestly')
+
+  // The counterfactual vocabulary is imperative ("freeze the process"), and it is only correct inside
+  // a would-have sentence. Guard the sentence, not the verb.
+  ok('the counterfactual sentence is phrased as a counterfactual',
+    /would have acted/.test(src), 'the sentence that uses the imperative verbs is gone')
+
+  // The library must not describe a mode as acting either.
+  ok('the library does not describe a mode as acting',
+    !lib.includes('enforcement is ON'), 'found in lib/')
+}
+
+// ── two switches whose names promised more than they did ─
+// `neverQuarantine` was a POLICY_DEFAULTS field nothing read: one grep hit, the definition. So it held
+// nothing back, promised nothing, and by the time it was removed it also described the tool
+// inaccurately -- `vault --move` takes a file out of its place. An unread field whose name reads like
+// a safeguard is the false signal this project removes, so it went rather than being wired up to
+// justify its own name.
+//
+// `policy.mode`'s suspend and reject are the other shape: recordable intent that nothing acts on, and
+// the honest form of that is to keep recording it and say so, not to refuse the value. What must not
+// survive is any screen claiming enforcement is on -- `decide` was corrected for that once and
+// `signals` kept saying it one screen over.
+{
+  section('switches that promised more than they did')
+  const g = await import('../lib/core.mjs')
+
+  ok('the unread neverQuarantine field is gone rather than kept as decoration',
+    !('neverQuarantine' in g.POLICY_DEFAULTS), Object.keys(g.POLICY_DEFAULTS).join(','))
+
+  // The remaining vocabulary is small enough to state exactly, so it is stated rather than sampled.
+  ok('the policy still defaults to observe and to nothing else',
+    g.POLICY_DEFAULTS.mode === 'observe', String(g.POLICY_DEFAULTS.mode))
+
+  // Every mode the CLI accepts must have a documented action phrase, and every phrase must be one the
+  // tool can actually describe -- the vocabulary is what the counterfactual sentence is built from.
+  for (const m of ['observe', 'suspend', 'reject']) {
+    const a = g.modeAction(m)
+    ok(`modeAction names what "${m}" would do`, typeof a === 'string' && a.length > 0, String(a))
+  }
+  ok('a mode with no phrase falls through as itself rather than as an empty string',
+    g.modeAction('not-a-mode') === 'not-a-mode', String(g.modeAction('not-a-mode')))
+}
+
 // ── a policy that cannot be read is not the default policy ─
 // `catch { raw = {} }` turned a corrupt policy into the built-in defaults, silently. The defaults are
 // the safe direction -- observe, empty allowlist -- so nothing dangerous followed, and that is exactly

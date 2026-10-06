@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Changed
+
+- **Two switches whose names promised more than they did.** Each was found by reading output, which is
+  the one place a claim cannot be caught by checking behaviour.
+  - **`neverQuarantine` is gone.** It was a `POLICY_DEFAULTS` field that nothing read -- one grep hit,
+    the definition -- so it held nothing back and promised nothing, and by the time it was removed it
+    also described the tool inaccurately, since `vault --move` takes a file out of its place. An unread
+    field whose name reads like a safeguard is the false signal this project removes, so it went rather
+    than being wired up to justify the name. Precedent: the same call on an unread `LEAVE_ALONE` set.
+  - **`policy.mode`'s `suspend` and `reject` stay recordable, and every screen now says what they
+    are.** They are intent recorded for a gate that has not opened, and recording intent is exactly
+    what Stage 0 exists for -- so the values are kept and the claims are fixed. `signals` said
+    "enforcement is ON" for a screen after `decide` had already been corrected for the same sentence,
+    and `policy show` printed a non-observe mode in red, which reads as an alarm rather than as what
+    the file says. All three now call it recorded intent that nothing reads.
+  - **The README boundary was restated per operation**, because "it never quarantines" stopped being
+    true the moment `vault --move` existed. What is true is narrower and more useful: nothing detected
+    is ever acted on by a rule; every act is a command a person types, and each says what it does to
+    the target -- `detain` does not touch the file, `isolate` rewrites the ACL, `vault` copies, and
+    `vault --move` is the only one that takes the file out of its place.
+
+### Added
+
+- A check that **no screen promises enforcement the tool cannot perform**, asserted over code rather
+  than over comments -- the three phrases it looks for all appear in `cli.mjs` as commentary recording
+  that they were once printed, and a check that cannot tell those apart fails on the fix it protects.
+  Verified to fail on a claim planted in code while the comments naming the same phrase stay legal.
+
 ### Fixed
 
 - **Records that could not be read were discarded silently, and every count built on them was a

@@ -41,7 +41,7 @@ leaving the target runnable would be the same lie with higher stakes.
 | `custody.mjs` | **the only existing action path** |
 | `policy.mjs` | a human's decision, written down and consulted before acting |
 | `activity/` | an append-only record that survives everything else being down |
-| `neverQuarantine` | the line the tool has already drawn about itself |
+| ~~`neverQuarantine`~~ | **removed 2026-10-06.** It was a `POLICY_DEFAULTS` field that nothing read, so it held nothing back and promised nothing -- and by the time it was removed it also described the tool inaccurately, since `vault --move` takes a file out of its place. An unread field whose name reads like a safeguard is the false signal this project removes, so it went rather than being wired up to justify the name. What it stood for is now stated per operation, in the README and in section 8. |
 
 `custody.mjs` is the template, and it is worth stating its shape because it is the shape everything
 new should have:

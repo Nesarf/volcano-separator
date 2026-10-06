@@ -595,7 +595,10 @@ async function main() {
         console.log(C.dim('  no file yet: these are the built-in defaults'))
       }
       console.log('')
-      console.log(`  mode         ${pol.mode === 'observe' ? C.green(pol.mode) : C.red(pol.mode)}`)
+      // A non-observe mode is shown as an intention, not as a red alarm. Red said "something bad is
+      // configured"; what is actually true is "you have written down what you would like to happen,
+      // and nothing reads it yet". Those call for different reactions, and only one of them is real.
+      console.log(`  mode         ${pol.mode === 'observe' ? C.green(pol.mode) : C.yellow(pol.mode + '  (recorded intent; nothing reads it yet)')}`)
       console.log(`  grace        ${pol.graceSeconds}s (a window hidden for less than this is not stealth)`)
       console.log(`  allow        ${pol.allow.length} entries`)
       for (const a of pol.allow) console.log(`     ${a}`)
@@ -809,7 +812,6 @@ async function main() {
       console.log(`custody timeline  (${t.lifecycles.length} decision(s) across ${t.files} record file(s))`)
       const dist = Object.entries(t.byOutcome).map(([k, v]) => `${k}: ${v}`).join(', ')
       console.log(C.dim(`  ${dist}`))
-      console.log()
 
       const showClosed = opts.all === true
       const list = showClosed ? t.lifecycles : [...open, ...closed.slice(-3)]
@@ -936,7 +938,10 @@ async function main() {
       console.log(`  findings   ${r.total}   (${r.allowed} already covered by the allowlist)`)
       if (r.unreadableMidFile) console.log(C.red(`  unreadable ${r.unreadableMidFile} record(s) -- this count is a lower bound`))
       console.log(`  by rule    ${Object.entries(r.byRule).map(([k, v]) => `${k}=${v}`).join('  ') || '(none)'}`)
-      console.log(`  mode       ${r.mode}${r.mode === 'observe' ? C.green('  (this layer only notices)') : C.red('  (enforcement is ON)')}`)
+      // Not "enforcement is ON". Nothing reads the mode, so a non-observe value records an intention
+      // rather than a behaviour -- and `decide` had already been corrected for saying exactly this
+      // while `signals` kept saying it. The same false claim, one screen over.
+      console.log(`  mode       ${r.mode}${r.mode === 'observe' ? C.green('  (this layer only notices)') : C.yellow('  (recorded intent; nothing reads it yet)')}`)
       console.log('')
       for (const f of r.findings) {
         const sev = f.severity === 'high' ? C.red('HIGH') : f.severity === 'medium' ? C.yellow('MED ') : C.dim('low ')

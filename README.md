@@ -232,16 +232,26 @@ approved. A plan reviewed as 40 entries executes as those 40.
 - **It records; it does not block.** The activity recorder gives attribution and a timeline, not
   prevention. Blocking a write needs a filter driver, and claiming otherwise would be the exact kind
   of false signal this tool was built to remove.
-- **It never quarantines.** `detain` freezes a process and asks a human. It does not move, rename,
-  rewrite or delete the target. A suspension is persistent and loud, because a suspension nobody
-  comes back for is worse than one that was never applied.
+- **It never quarantines on its own.** Nothing this tool detects is acted on by a rule. Every act is
+  a command a person types, and each says what it does to the target:
+  - `detain` freezes a process and asks a human. The file is not touched at all, and a suspension is
+    persistent and loud, because one nobody comes back for is worse than one never applied.
+  - `isolate` rewrites the file's ACL and stops it launching. The bytes are untouched.
+  - `vault` copies a file into a store on its own volume; **`vault --move` is the one operation that
+    takes a file out of its place**, and it has to be asked for by that word. The default leaves the
+    original exactly where it was, so a mistake costs disk space rather than a file.
+  - Every one of them prints the command that reverses it, and that command does not need this tool
+    to exist.
 - **Detection does not act.** `signals` reports and `decide` says what it *would* do; the mode
-  defaults to `observe` and nothing enforces. `policy mode suspend` and `policy mode reject` are
-  accepted and **implemented nowhere** — the command says so when you set one, because a setting that
-  promises an action the tool cannot take is the kind of false signal this project exists to remove.
-  An enforcement path would first need a measured false-positive rate, and the detectors have to be
-  shown to fire at all before that number means anything. The design for changing this, and the
-  sequence it would have to follow, is in [`DESIGN-enforcement.md`](DESIGN-enforcement.md).
+  defaults to `observe` and nothing reads it. `policy mode suspend` and `policy mode reject` are
+  **recorded as intentions and implemented nowhere** — the command says so when you set one, and
+  `policy show` reports a non-observe mode as recorded intent rather than as an alarm, because a
+  setting that promises an action the tool cannot take is the kind of false signal this project
+  exists to remove. What is left of the old promise is a field that nothing read, and it is gone
+  rather than kept as decoration. Promotion to automatic would first need a measured false-positive
+  rate, and the detectors have to be shown to fire at all before that number means anything. The
+  design for changing this, and the sequence it would have to follow, is in
+  [`DESIGN-enforcement.md`](DESIGN-enforcement.md).
 - **It does not patch the host plugin.** The plugin's `ensureDaemon()` starts with
   `if (await isServerHealthy(...)) return;` — once the service is healthy it returns immediately and
   the fragile path is never entered. That is "no longer traversed", not "patched".
