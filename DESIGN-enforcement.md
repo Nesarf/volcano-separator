@@ -230,6 +230,7 @@ by a person, has a journal and an undo, and has **no automatic caller**:
 |---|---|---|
 | ACL isolation | `isolate <path\|pid>`, `restore <journal>`, `isolated` | rewrites the ACL; bytes untouched |
 | In-place encryption | `encrypt <path>`, `decrypt <journal>`, `encrypted` | rewrites the bytes, in place |
+| The vault | `vault <path>` (`--move`), `unvault <id>`, `vaulted` | copies it, or with `--move` takes it out of its place |
 
 Correction (2026-10-06): this section used to say "BUILT, for isolation only. `encrypt` is not
 built." That was true when it was written and stopped being true when `crypt.mjs` landed. It is
