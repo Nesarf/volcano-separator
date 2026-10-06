@@ -172,6 +172,21 @@ than as mitigation.
 | **The file is in use** | Do nothing, and say so. A file that cannot be opened for exclusive write is a file something is using, and encrypting under a running process produces a file that can neither run nor be restored cleanly. |
 | **Antivirus reacts** | Possible, and not preventable. The mitigation is only that the act is reversible and the journal says what the file was. This is a reason to prefer ACL isolation, which antivirus ignores, over encryption. |
 | **Power is lost mid-write** | Write to a temporary name in the same directory, flush, then rename over the original. A rename within a directory is atomic; a partial write is not, and a half-encrypted binary is neither runnable nor restorable. |
+
+> **What the implementation actually guarantees today, stated precisely.** The ordering above is
+> real: the journal is written before the file is touched, the ciphertext is written to a
+> temporary name, and the original is only replaced after the round trip verifies byte for byte.
+> That makes the failure mode **logically** correct — a crash, a kill, or a power loss leaves
+> either the original or a complete container, never a half-written one.
+>
+> It does **not** yet make it **durable**. Nothing in this codebase calls `fsync` (verified: zero
+> occurrences), so what is on the platter when a write returns is the filesystem's decision and
+> not ours. A power loss can therefore lose a journal entry that "was written", or leave a rename
+> that "happened" undone. The consequence is bounded by the ordering — a missing journal entry
+> means the file is not restored automatically, and the `icacls`/decrypt escape hatch still exists
+> — but "crash-safe" and "power-loss durable" are two different claims and only the first one is
+> true today. Stated here rather than left to be inferred, because a design document that
+> overstates this is the exact class of false signal this project exists to remove.
 | **The target is a system file** | Never. Section 7. |
 | **The finding was wrong** | The human undoes it and the policy records the correction. This is why the first promotion is per-rule and not global. |
 
