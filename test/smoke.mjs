@@ -2130,6 +2130,63 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(base, { recursive: true, force: true })
 }
 
+// ── a record that could not be read is counted, and loss is told apart from a partial write ─
+  // The parse loop used to end in an empty catch, which discarded the row AND the fact of the row:
+  // 410 records in this machine's own record failed to parse and nothing anywhere said so, so every
+  // view built on readActivity under-reported while looking complete. Fewer findings reads as good
+  // news, which is the failure this layer exists to prevent.
+  //
+  // The two cases are counted apart because they mean opposite things: a partial last line is the
+  // normal state of a file being appended to right now and costs nothing, while a line that is not
+  // the last one is a record that is gone.
+{
+  const g = await import('../lib/core.mjs')
+  const { mkdirSync, writeFileSync } = await import('node:fs')
+  const dir = join(tmpdir(), 'vsep-unreadable-' + process.pid)
+  rmSync(dir, { recursive: true, force: true })
+  const now = new Date().toISOString()
+  {
+    const NL = String.fromCharCode(10)
+    const part = (name, lines) => {
+      const d = join(dir, 'partial-' + name)
+      mkdirSync(join(d, 'activity'), { recursive: true })
+      writeFileSync(join(d, 'activity', 'activity-2026-01-01.ndjson'), lines.join(NL) + NL)
+      return { logDir: d }
+    }
+    const good = JSON.stringify({ t: now, kind: 'proc-start', pid: 1, name: 'a.exe' })
+
+    // A finished record, then a truncated tail: the ordinary state of a live file.
+    const tailCtx = part('tail', [good, '{"t":"2026-01-01T00:00:02Z","kind":"proc-st'])
+    const tail = g.readActivity(tailCtx, { limit: 10 })
+    ok('a truncated last line is counted as unreadable', tail.unreadableLines === 1, JSON.stringify(tail.unreadableLines))
+    ok('but it is not counted as loss, because the next read will see the finished row',
+      tail.unreadableMidFile === 0 && tail.complete === true, JSON.stringify({ mid: tail.unreadableMidFile, complete: tail.complete }))
+
+    // Damage in the middle, with intact records after it: this one is gone.
+    const midCtx = part('mid', [good, '{"t":"2026-01-01T00:00:02Z","broken', good, good])
+    const mid = g.readActivity(midCtx, { limit: 10 })
+    ok('damage with records after it is counted as mid-file', mid.unreadableMidFile === 1, JSON.stringify(mid.unreadableMidFile))
+    ok('and the record is reported incomplete', mid.complete === false, JSON.stringify(mid.complete))
+    ok('and the lines that did parse are still returned, so the count is a lower bound and not a blank',
+      mid.total === 3, JSON.stringify(mid.total))
+
+    // The signal layer carries it, because a finding count over a record with holes is a lower bound.
+    const sig = g.analyzeSignals(midCtx, { sinceMinutes: 60 * 24 * 365 })
+    ok('the detector reports the holes its count was computed over',
+      sig.unreadableMidFile === 1 && sig.recordComplete === false,
+      JSON.stringify({ mid: sig.unreadableMidFile, complete: sig.recordComplete }))
+
+    // And a clean record reports none of it, so the warning means something when it appears.
+    const cleanCtx = part('clean', [good, good])
+    const clean = g.readActivity(cleanCtx, { limit: 10 })
+    ok('a clean record reports no loss at all',
+      clean.unreadableLines === 0 && clean.unreadableMidFile === 0 && clean.complete === true,
+      JSON.stringify({ lines: clean.unreadableLines, mid: clean.unreadableMidFile }))
+  }
+  rmSync(dir, { recursive: true, force: true })
+}
+
+
 // ── a policy that cannot be read is not the default policy ─
 // `catch { raw = {} }` turned a corrupt policy into the built-in defaults, silently. The defaults are
 // the safe direction -- observe, empty allowlist -- so nothing dangerous followed, and that is exactly

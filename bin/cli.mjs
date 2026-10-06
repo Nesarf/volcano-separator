@@ -440,6 +440,14 @@ async function main() {
       if (opts.json) return emit(r)
       console.log(`activity record: ${r.dir}`)
       console.log(C.dim(`  ${r.total} events in the window shown${r.kind || opts.kind ? '' : ''}`))
+      // A hole in the record is named, and only when it is a hole: a partial last line is the
+      // normal state of a file being appended to right now and costs nothing. A record that is not
+      // the last one and did not parse is gone, and every view over this function under-reports
+      // without it -- which reads as good news.
+      if (r.unreadableMidFile) {
+        console.log(C.red(`  ${r.unreadableMidFile} record(s) in this window could not be read`) + C.dim(` of ${r.linesSeen} line(s)`))
+        console.log(C.dim('  nothing will recover them, and every count below is a lower bound'))
+      }
       console.log('')
       if (r.events.length === 0) {
         const why = !r.recorderRunning
@@ -926,6 +934,7 @@ async function main() {
       console.log(`signals over the last ${r.window}  (${r.observed} recorded events examined)`)
       console.log('')
       console.log(`  findings   ${r.total}   (${r.allowed} already covered by the allowlist)`)
+      if (r.unreadableMidFile) console.log(C.red(`  unreadable ${r.unreadableMidFile} record(s) -- this count is a lower bound`))
       console.log(`  by rule    ${Object.entries(r.byRule).map(([k, v]) => `${k}=${v}`).join('  ') || '(none)'}`)
       console.log(`  mode       ${r.mode}${r.mode === 'observe' ? C.green('  (this layer only notices)') : C.red('  (enforcement is ON)')}`)
       console.log('')

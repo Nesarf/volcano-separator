@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Records that could not be read were discarded silently, and every count built on them was a
+  lower bound that looked like an answer.** The parse loop ended in an empty `catch`. It threw away
+  the row *and the fact of the row*: measured on this machine, **410 records in its own activity
+  record did not parse** and nothing anywhere said so. Whatever the cause, the effect was that
+  `activity`, `signals`, `decide` and `busy` all under-reported by 0.1% while reading as complete --
+  and fewer findings reads as good news, which is the failure this whole layer exists to prevent.
+  - Unreadable lines are now counted, and **the two kinds are counted apart** because they mean
+    opposite things. A truncated *last* line is the normal state of a file being appended to right
+    now: it costs nothing, the next read sees the finished row, and warning about it would train the
+    reader to ignore the warning. A line that is **not** the last one is a record that is gone, and
+    nothing will bring it back. Only the second is reported.
+  - `readActivity` returns `linesSeen`, `unreadableLines`, `unreadableMidFile` and `complete`;
+    `analyzeSignals` carries them through, because a finding count computed over a record with holes
+    is a lower bound and must say so; `activity` and `signals` print it.
+  - Verified to fail: disabling the counters makes four checks fail, one of them reporting a record
+    with a hole in it as `complete: true`.
+
 ### Added
 
 - **`vault` / `unvault` / `vaulted` -- the first operation that can take a file out of its place.**
