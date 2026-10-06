@@ -2392,13 +2392,54 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     // host down.
     const live = svc.healthKind(dsh, 'live')
     ok('the live probe is declared as reachability rather than as a status code',
-      live.kind === 'http-any' && live.okWhen === 'any-http-answer', JSON.stringify(live))
+      live.kind === 'any-http-answer' && live.okWhen === 'any-http-answer', JSON.stringify(live))
     const ready = svc.healthKind(dsh, 'ready')
     ok('and a service that publishes no readiness endpoint says so instead of being pointed at a 404',
       ready.kind === 'none' && typeof ready.why === 'string' && ready.why.length > 0, JSON.stringify(ready))
     ok('the health vocabulary keeps the strict kind for a service that really answers 2xx',
       svc.healthKind(svc.HINDSIGHT, 'ready').kind === 'http-json',
       JSON.stringify(svc.healthKind(svc.HINDSIGHT, 'ready')))
+
+    // ── every kind a descriptor declares must be one something implements ──
+    // This is the check that would have caught the bug it was written after. A descriptor declared
+    // `kind: 'http-any'` while the implementation enumerated `'any-http-answer'`, so the strict test
+    // ran against a 401, a live service was reported unhealthy, and -- worse -- the same mismatch on
+    // the Hindsight side made the main probe report "port is open but /health did not answer" while
+    // curl got 200. Both names were mine, an hour apart, and a wrong answer looked like a working one.
+    {
+      const sup = await import('../lib/supervisor.mjs')
+      const kinds = new Set()
+      for (const d of Object.values(svc.SERVICE_DESCRIPTORS)) {
+        for (const which of ['ready', 'live']) {
+          const h = svc.healthKind(d, which)
+          if (h.kind && h.kind !== 'none') kinds.add(h.kind)
+        }
+      }
+      const unimplemented = []
+      for (const k of kinds) {
+        try {
+          // Asked with a 2xx and with a 401, because a kind that only works for one of them is not
+          // a kind, it is a coincidence.
+          sup.probeKindSaysAlive(k, 200)
+          sup.probeKindSaysAlive(k, 401)
+        } catch {
+          unimplemented.push(k)
+        }
+      }
+      ok('every probe kind a descriptor declares is implemented',
+        unimplemented.length === 0, `not implemented: ${unimplemented.join(', ')}`)
+
+      // And an unknown kind is refused rather than falling back to whatever the else branch does.
+      let threw = false
+      try { sup.probeKindSaysAlive('not-a-kind', 200) } catch { threw = true }
+      ok('and a kind nothing implements is refused loudly', threw, 'an unknown kind was accepted')
+
+      // The two implemented kinds must actually differ, or one of them is decoration.
+      ok('the strict kind rejects a 401 while the reachability kind accepts it',
+        sup.probeKindSaysAlive('http-json', 401) === false &&
+        sup.probeKindSaysAlive('any-http-answer', 401) === true,
+        'the two kinds behave the same, so one of them says nothing')
+    }
 
     // It cannot be launched, and that is a declared fact rather than a failure. The entry point is
     // decided by the install location and is recorded nowhere this tool reads; a guessed path would

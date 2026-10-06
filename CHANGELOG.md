@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The health probe now asks what the descriptor says to ask, and the first version of that change
+  broke the probe it was meant to generalise.** `probeDaemon` had `/health`, `/health/live` and "200
+  means ready" written into it -- not wrong for Hindsight, but the only shape the function could
+  express. It reads the descriptor now, and two kinds exist because two services need them:
+  `http-json` (2xx means ready) and `any-http-answer` (any answer means alive, for a service that
+  answers 401 to its guarded endpoints and 404 to everything else).
+  - **Verified against both real services on this machine:** Hindsight reports
+    `port 9077 is listening and ready (/health -> 200)` unchanged, and the DSH host reports
+    `port 3080 is listening and answering (/ -> 401)` -- where the old code called it `NOT HEALTHY`.
+  - The failure worth recording is how nearly this shipped. `askProbe` compared against
+    `'any-http-answer'` while the DSH descriptor declared `kind: 'http-any'`, and separately the
+    implementation enumerated `'http-2xx'` while both descriptors declared `'http-json'`. **Both
+    spellings were mine, written an hour apart**, and each mismatch made a live service read as down.
+  - The second one is the instructive one: the throw added to make an unknown kind loud was placed
+    **inside** the catch that treats everything as a network error, so the Hindsight probe began
+    reporting `port 9077 is open but /health did not answer` while `curl` and a raw `fetch` both got
+    200. **A loud failure inside a catch that means "the network did not answer" is a silent
+    failure.** The kind is now validated before the call, outside the catch.
+  - A check now asserts that **every kind any descriptor declares is one something implements**, and
+    that an unknown kind is refused rather than falling back to whatever the else branch does.
+    Verified to fail on a deliberate misalignment. The two kinds are also asserted to *differ*, since
+    a pair that behaves the same means one of them is decoration.
+
 ### Added
 
 - **A second service descriptor, and it is a real service rather than one invented to fit.** A
