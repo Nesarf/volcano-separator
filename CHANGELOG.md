@@ -5,7 +5,17 @@
 ### Added
 
 - **[`TODO.md`](TODO.md)** -- agreed work that is not done, with what is measured and what would count
-  as finished. First entry: the supervisor knows one specific stack (`uv` → Hindsight → its embedded
+  as finished. Its second entry records a change of intent: enforcement capability is wanted rather
+  than deferred, and the exclusions that were load-bearing are kept while the ones that were fiat are
+  not. Against that entry's own framing, the measurement is that **`neverQuarantine` is not the thing
+  constraining anything** -- it is a policy field no code reads (`grep` returns one hit, its
+  definition), so there is no switch to relax and no quarantine to forbid. What limits the tool is the
+  behavioural rule in the commands. The measured blockers are that `policy.mode` accepts `suspend` and
+  `reject` and implements neither, that the decision layer's counterfactual has no consumer, that the
+  evidence ledger holds 2 rows both reading `actionable: 0`, and that no undo has ever run as part of
+  a real decision.
+
+  First entry: the supervisor knows one specific stack (`uv` → Hindsight → its embedded
   PostgreSQL) and should be able to supervise a comparable local service. The coupling was measured
   rather than assumed: 45 occurrences of `hindsight` over seven modules, and the blockers are not the
   ones that look obvious -- the profile name, the ports and the cache directory are already
