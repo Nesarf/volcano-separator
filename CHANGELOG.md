@@ -4,6 +4,36 @@
 
 ### Fixed
 
+- **`cache --apply` carried out a list nobody had reviewed.** `--prune` built a plan and showed it;
+  `--apply` threw that away and rescanned, so the removals that actually ran were whatever the cache
+  looked like at that moment. A plan reviewed as "remove 40 entries, free 0.07 GB" could execute as
+  a different 40 -- or as 60 -- and the output still read like the reviewed one. Both halves were
+  individually careful and the pair was not.
+  - A plan is now stored under a name derived from its own contents, so the same cache state and the
+    same options produce the same id, and a different id means a different set of removals. A random
+    name would have made "this is the plan you looked at" unverifiable and "this is a different
+    plan" invisible.
+  - `--apply` runs that stored plan, not a fresh scan. `--plan-id <id>` runs an older one; with no
+    plan at all it refuses and says how to make one, rather than silently rebuilding.
+  - **Each entry is revalidated before anything moves: same path, same size.** The rename test
+    answers "is anything holding this entry", which is not the same question as "is this still the
+    entry that was reviewed" -- and only the second one is what a reviewed plan promises. An entry
+    that changed is left alone and named; an entry that vanished is reported as gone.
+  - **Nothing outside the reviewed plan is ever removed.** New candidates that appeared in the
+    meantime are left for the next plan, where a person sees them before approving them. When the
+    cache has moved, the output says so and prints both ids rather than hiding it behind either one.
+  - `gone` and `changed` are reported separately from `refused`: "a running process holds this" and
+    "this is not the entry that was reviewed" call for different responses from the person reading,
+    and folding them together would hide which one happened.
+  - `volcano_cache_plan` now stores the plan it shows. An agent that prints a list and a person who
+    then runs `--apply` are looking at the same plan only if it was written down.
+  - Plans live beside `policy.json` rather than in the cache, for the same reason the isolation
+    journal does: a decision about this machine, not an artifact of running the tool. The newest 20
+    are kept, because this is a record of decisions and not a log.
+  - **The first version of this was caught by the suite on the next run:** the existing prune test
+    wrote `bytes: 100` by hand, which the new revalidation refused. That is the check doing its job
+    -- a real plan's sizes come from a scan -- so the fixture now measures.
+
 - **Running the test suite deleted the accumulated evidence.** `rollUpEvidence` and `readEvidence`
   hardcoded `~/.volcano-separator/evidence.ndjson` with no override, so the test that covers them had
   nowhere to write except the real file -- and it cleaned up by deleting it. Every green run reset

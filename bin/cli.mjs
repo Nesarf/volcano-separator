@@ -91,6 +91,9 @@ Commands:
   busy [minutes]     what has actually been running, grouped (runs, location, allowlist)
   redline [seconds]  what is sitting on C: in user-writable space (--record keeps findings)
   cache [--prune] [--apply] [--keep N]   uv cache hygiene: duplicates, old versions, idle environments
+                     --prune shows the plan and stores it; --apply carries out exactly that plan
+                     (--plan-id <id> to run an older one; a plan whose targets have changed or gone
+                     is left alone and named)
   (heal --custody     also reconcile custody: a suspension is persistent, so a freeze nobody
                       came back for stays frozen; the alert names the release command)
   signals [minutes]  what looks like stealth, with evidence (observe-only)
@@ -932,15 +935,52 @@ async function main() {
     }
 
     case 'cache': {
+      const keep = Number(opts.keep ?? 1) || 1
+      const envs = opts['keep-envs'] !== true
+      const doApply = opts.apply === true
+      const wanted = typeof opts['plan-id'] === 'string' ? opts['plan-id'] : null
+
       const scan = await uvc.scanUvCache(ctx)
       if (!scan.ok) { console.log(C.red('FAIL') + ' cache: ' + scan.detail); process.exit(1) }
-      const plan = uvc.planUvPrune(scan, {
-        keepVersions: Number(opts.keep ?? 1) || 1,
-        pruneEnvironments: opts['keep-envs'] !== true,
-      })
-      const doApply = opts.apply === true
-      const result = opts.prune || doApply ? uvc.applyUvPrune(plan, { dryRun: !doApply }) : null
-      if (opts.json) return emit({ root: scan.root, total: scan.total, subdirs: scan.subdirs, plan, result })
+      const fresh = uvc.planUvPrune(scan, { keepVersions: keep, pruneEnvironments: envs })
+
+      let plan = fresh
+      let saved = null
+      let result = null
+      let applied = null
+
+      if (doApply) {
+        // --apply carries out a plan that was reviewed, not whatever the cache looks like now.
+        // The plan shown by --prune is saved under a name derived from its own contents, and that
+        // is the plan that runs. New candidates are left for the next plan, where a person sees
+        // them before they are approved.
+        const newest = uvc.listPlans(ctx)[0] ?? null
+        const id = wanted ?? newest?.id ?? null
+        if (!id) {
+          console.log(C.red('FAIL') + ' cache --apply: no reviewed plan to carry out')
+          console.log(C.dim('  run `cache --prune` first: it prints the plan, and --apply runs exactly that one'))
+          process.exit(1)
+        }
+        const loaded = uvc.loadPlan(ctx, id)
+        if (!loaded.ok) { console.log(C.red('FAIL') + ' cache --apply: ' + loaded.detail); process.exit(1) }
+        plan = loaded.plan
+        saved = { file: loaded.file, id }
+        applied = { requestedId: id, isNewest: newest?.id === id, freshlyBuilt: false }
+        if (fresh.id !== plan.id) {
+          // Named, not silent. The plan being run is the one that was reviewed; the cache has
+          // moved since, and that is worth knowing rather than hiding behind either plan.
+          applied.differsFromCurrentScan = true
+          applied.currentPlanId = fresh.id
+        }
+        result = uvc.applyUvPrune(plan, { dryRun: false })
+      } else if (opts.prune) {
+        saved = uvc.savePlan(ctx, fresh)
+        result = uvc.applyUvPrune(fresh, { dryRun: true })
+      } else {
+        saved = uvc.savePlan(ctx, fresh)
+      }
+
+      if (opts.json) return emit({ root: scan.root, total: scan.total, subdirs: scan.subdirs, plan, saved, applied, currentPlan: fresh, result })
 
       const mb = (b) => (b / 1048576).toFixed(1).padStart(9) + ' MB'
       console.log('uv cache: ' + scan.root)
@@ -952,11 +992,11 @@ async function main() {
       const sum = (arr) => arr.reduce((s, t) => s + t.bytes, 0)
       const dupes = plan.targets.filter((t) => t.reason === 'duplicate')
       const oldv = plan.targets.filter((t) => t.reason === 'old-version')
-      const envs = plan.targets.filter((t) => t.reason === 'stale-environment')
+      const staleEnvs = plan.targets.filter((t) => t.reason === 'stale-environment')
       console.log('  packages cached        ' + scan.packages.size)
       console.log('  duplicate copies       ' + dupes.length + '  (' + (sum(dupes) / 1048576).toFixed(0) + ' MB)')
       console.log('  older versions         ' + oldv.length + '  (' + (sum(oldv) / 1048576).toFixed(0) + ' MB)')
-      console.log('  idle environments      ' + envs.length + '  (' + (sum(envs) / 1048576).toFixed(0) + ' MB)')
+      console.log('  idle environments      ' + staleEnvs.length + '  (' + (sum(staleEnvs) / 1048576).toFixed(0) + ' MB)')
       console.log('  in use, never touched  ' + plan.skippedInUse)
       console.log('')
       console.log('  reclaimable ' + plan.gb + ' GB, keeping the newest ' + plan.keepVersions + ' version(s) per package')
@@ -966,17 +1006,40 @@ async function main() {
       }
       if (plan.targets.length > 12) console.log(C.dim('    ... and ' + (plan.targets.length - 12) + ' more'))
       console.log('')
+      console.log('  plan ' + plan.id + ' -- ' + plan.targets.length + ' entr(ies), ' + plan.gb + ' GB')
+      if (doApply) {
+        console.log(C.dim('    this is the plan that --apply carried out, and the only one it will ever carry out'))
+      } else {
+        console.log(C.dim('    --apply carries out exactly this list, so it is stored under this name'))
+        if (saved?.file) console.log(C.dim('    ' + saved.file))
+      }
+      console.log('')
+      if (applied?.differsFromCurrentScan) {
+        console.log(C.yellow('  the cache has moved since this plan was made'))
+        console.log(C.dim('    reviewed ' + plan.id + ' (' + plan.targets.length + ' entries)'))
+        console.log(C.dim('    a fresh scan right now would be ' + applied.currentPlanId + ' (' + fresh.targets.length + ' entries)'))
+        console.log(C.dim('    the reviewed plan ran; anything new is left for the next plan'))
+        console.log('')
+      }
       if (result) {
         console.log((result.dryRun ? C.yellow('dry-run') : C.green('applied')) + ': ' + (result.dryRun ? 'would remove ' : 'removed ') + result.removed + ' entries, ' + result.gb + ' GB')
         for (const f of result.refused || []) console.log(C.dim('  refused by the filesystem (in use): ' + f.hash))
         for (const f of result.failed) console.log(C.dim('  staged but not deleted: ' + f.hash + ' at ' + f.at))
+        for (const f of result.gone || []) console.log(C.yellow('  gone before it could be removed: ') + f.hash + ' (' + f.why + ')')
+        for (const f of result.changed || []) {
+          console.log(C.yellow('  changed after the plan was made, left alone: ') + f.hash + ' (' + f.name + ': ' + f.was + ' -> ' + f.now + ' bytes)')
+        }
         if (result.dryRun) console.log(C.dim('  add --apply to actually remove'))
+        else if (result.skipped) console.log(C.dim('  ' + result.skipped + ' entr(ies) from the plan were not removed; a fresh plan would show what is left'))
       } else {
         console.log(C.dim('  add --prune to list the exact removals, --apply to carry them out'))
       }
       console.log(C.dim('  Each removal is staged by renaming the entry first. Windows refuses to rename a'))
       console.log(C.dim('  directory while a file inside it is open, so a refused rename IS the in-use answer --'))
       console.log(C.dim('  authoritative and atomic, where scanning process paths is only a pre-filter.'))
+      console.log(C.dim('  Before staging, each entry is rechecked: same path, same size. The rename answers'))
+      console.log(C.dim('  "is this in use"; it cannot answer "is this still what was reviewed", and a plan'))
+      console.log(C.dim('  approved as 40 entries must not execute as a different 40.'))
       break
     }
 

@@ -13,7 +13,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -971,9 +971,12 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   writeFileSync(join(entry, 'pyvenv.cfg'), 'home = x')
   writeFileSync(join(entry, 'payload.bin'), 'data')
 
+  // The size in a plan is what the scan measured, so the fixture must use a measured size too.
+  // A hand-written number would be rejected by the revalidation below -- which is the point of it.
+  const entryBytes = statSync(join(entry, 'pyvenv.cfg')).size + statSync(join(entry, 'payload.bin')).size
   const plan = {
     ok: true, archiveDir: archive,
-    targets: [{ hash: 'FAKEHASH12345678', dir: entry, bytes: 100, name: '(uvx environment)', reason: 'stale-environment' }],
+    targets: [{ hash: 'FAKEHASH12345678', dir: entry, bytes: entryBytes, name: '(uvx environment)', reason: 'stale-environment' }],
   }
 
   const dry = uvc.applyUvPrune(plan, { dryRun: true })
@@ -988,7 +991,9 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     'staged entry survived')
 
   // A target that vanished between planning and applying must be reported, not thrown: the plan
-  // is a snapshot and the machine moves underneath it.
+  // is a snapshot and the machine moves underneath it. It is reported as *gone*, not as *refused*:
+  // "a running process holds this" and "this is not here any more" need different responses from
+  // the person reading, and folding them together would hide which one happened.
   const gone = {
     ok: true, archiveDir: archive,
     targets: [{ hash: 'GONEHASH00000000', dir: join(archive, 'GONEHASH00000000'), bytes: 1, name: 'x', reason: 'duplicate' }],
@@ -996,8 +1001,97 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   let threw = null
   let res = null
   try { res = uvc.applyUvPrune(gone, { dryRun: false }) } catch (e) { threw = String(e) }
-  ok('a target that vanished is reported rather than thrown', threw === null && res && res.refused.length === 1,
-    threw ? `threw ${threw}` : JSON.stringify(res && res.refused))
+  ok('a target that vanished is reported rather than thrown',
+    threw === null && res && res.gone.length === 1 && res.refused.length === 0,
+    threw ? `threw ${threw}` : JSON.stringify({ gone: res?.gone, refused: res?.refused }))
+  ok('a vanished target is not counted as removed', res?.removed === 0, JSON.stringify({ removed: res?.removed }))
+
+  rmSync(base, { recursive: true, force: true })
+}
+
+// ── a reviewed plan is the only thing --apply carries out ─
+// The CLI used to build a plan, show it, and then rescan when told to apply it. Both halves were
+// individually careful and the pair was not: the list that ran was whatever the cache looked like
+// at apply time, so a plan reviewed as "remove 40 entries, free 0.07 GB" could execute as a
+// different 40 -- or as 60 -- while the output still read like the reviewed one. The rename test
+// asks "is anything holding this entry", which is not the same question as "is this still the
+// entry that was reviewed", and only the second one is the promise a reviewed plan makes.
+{
+  section('a reviewed plan is bound to what runs')
+  const uvc = await import('../lib/uvcache.mjs')
+  const base = join(tmpdir(), 'volcano-uvcplan-' + process.pid)
+  const archive = join(base, 'archive-v0')
+  const oldEntry = join(archive, 'PLANOLD000000001')
+  const newEntry = join(archive, 'PLANNEW000000002')
+  rmSync(base, { recursive: true, force: true })
+  for (const [dir, version, filler] of [[oldEntry, '1.0.0', 200], [newEntry, '2.0.0', 400]]) {
+    const dist = join(dir, 'demo-' + version + '.dist-info')
+    mkdirSync(dist, { recursive: true })
+    writeFileSync(join(dist, 'METADATA'), 'x'.repeat(filler))
+  }
+  const ctx = { uvCacheDir: base, uvCacheReal: base, cachePlanDir: join(base, 'plans') }
+
+  const scan = await uvc.scanUvCache(ctx)
+  ok('a synthetic cache can be scanned without a running machine',
+    scan.ok === true && scan.packages.get('demo')?.length === 2, JSON.stringify({ ok: scan.ok, detail: scan.detail }))
+
+  const plan = uvc.planUvPrune(scan, { keepVersions: 1, pruneEnvironments: false })
+  ok('the plan names the older version and nothing else',
+    plan.targets.length === 1 && plan.targets[0].hash === 'PLANOLD000000001', JSON.stringify(plan.targets.map((t) => t.hash)))
+
+  const saved = uvc.savePlan(ctx, plan)
+  ok('the plan is stored under its own id', saved.ok === true && existsSync(saved.file), JSON.stringify(saved))
+  const back = uvc.loadPlan(ctx, plan.id)
+  ok('it reads back with the same id and the same targets',
+    back.ok === true && back.plan.id === plan.id && back.plan.targets.length === plan.targets.length,
+    JSON.stringify({ ok: back.ok, detail: back.detail }))
+
+  // A named plan that does not exist is a refusal, not a silent rebuild.
+  const missing = uvc.loadPlan(ctx, 'deadbeefdeadbeef')
+  ok('an unknown plan id is refused rather than rebuilt', missing.ok === false && /no saved plan/.test(missing.detail), JSON.stringify(missing))
+
+  // A plan file whose contents disagree with its name is refused: the name is what a person read,
+  // so a file that answers to a different name is not the plan that was reviewed.
+  const liar = join(ctx.cachePlanDir, 'aaaaaaaaaaaaaaaa.json')
+  writeFileSync(liar, JSON.stringify({ ...plan, id: 'bbbbbbbbbbbbbbbb' }), 'utf8')
+  const lied = uvc.loadPlan(ctx, 'aaaaaaaaaaaaaaaa')
+  ok('a plan whose contents disagree with its name is refused',
+    lied.ok === false && /says it is/.test(lied.detail), JSON.stringify(lied))
+
+  // An id is a name, never a path.
+  let traversal = null
+  try { uvc.loadPlan(ctx, '../../policy') } catch (e) { traversal = String(e) }
+  ok('a plan id cannot walk out of the plan directory',
+    traversal === null ? uvc.loadPlan(ctx, '../../policy').ok === false : /not a plan id/.test(traversal),
+    JSON.stringify({ traversal }))
+
+  // ── the revalidation, which is the whole point ──
+  // The entry grew after the plan was made: it is not the entry that was reviewed, so it stays.
+  const grown = join(oldEntry, 'demo-1.0.0.dist-info', 'EXTRA')
+  writeFileSync(grown, 'y'.repeat(999))
+  const applied = uvc.applyUvPrune(back.plan, { dryRun: false })
+  ok('an entry that changed after the plan was made is left alone',
+    applied.removed === 0 && applied.changed.length === 1 && applied.changed[0].hash === 'PLANOLD000000001',
+    JSON.stringify({ removed: applied.removed, changed: applied.changed }))
+  ok('the changed entry is still on disk', existsSync(oldEntry))
+  ok('and the run says it was not intact', applied.intact === false && applied.skipped === 1,
+    JSON.stringify({ intact: applied.intact, skipped: applied.skipped }))
+
+  // Restored to what the plan described, the same plan then removes exactly it.
+  rmSync(grown, { force: true })
+  const second = uvc.applyUvPrune(back.plan, { dryRun: false })
+  ok('the same plan removes the entry once it matches the plan again',
+    second.removed === 1 && !existsSync(oldEntry) && second.intact === true,
+    JSON.stringify({ removed: second.removed, changed: second.changed, gone: second.gone }))
+  ok('and it removed nothing that was not in the plan',
+    existsSync(newEntry) && second.targets.length === 1, JSON.stringify({ newEntryStill: existsSync(newEntry) }))
+
+  // Nothing outside the reviewed plan is ever touched, even when the cache now holds more.
+  const extraEntry = join(archive, 'PLANEXTRA0000003')
+  mkdirSync(join(extraEntry, 'demo-3.0.0.dist-info'), { recursive: true })
+  const third = uvc.applyUvPrune(back.plan, { dryRun: false })
+  ok('a fresh candidate that appeared later is not removed by an older plan',
+    third.removed === 0 && existsSync(extraEntry), JSON.stringify({ removed: third.removed, gone: third.gone }))
 
   rmSync(base, { recursive: true, force: true })
 }

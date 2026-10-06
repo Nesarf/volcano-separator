@@ -215,10 +215,17 @@ display would hide the secret from the default view while leaving it in the file
 **5. An idle cache is not a small one.**
 After months the uv cache held 8.6 GB, of which 5.3 GB was eight uvx environments built by earlier
 runs and never reaped, and a further 1.9 GB was duplicate copies and superseded versions.
-`cache` reports that, `--prune` lists the removals, `--apply` carries them out. Each removal is
-staged by renaming the entry first: Windows refuses to rename a directory while a file inside it is
-open, so a refused rename *is* the answer that something is using it — and it is one atomic
-operation, where scanning running processes and then deleting is not.
+`cache` reports that, `--prune` lists the removals and stores the list, `--apply` carries out
+exactly that list. Each removal is staged by renaming the entry first: Windows refuses to rename a
+directory while a file inside it is open, so a refused rename *is* the answer that something is
+using it — and it is one atomic operation, where scanning running processes and then deleting is
+not.
+
+The rename answers *is anything holding this entry*. It cannot answer *is this still the entry that
+was reviewed*, so every entry is rechecked — same path, same size — before it moves. An entry that
+changed or vanished is left alone and named, and nothing outside the reviewed plan is ever removed:
+candidates that appeared since are left for the next plan, where they are visible before they are
+approved. A plan reviewed as 40 entries executes as those 40.
 
 ## Boundaries — what it deliberately does not do
 
