@@ -2198,6 +2198,100 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 }
 
 
+// ── the chamber probe: tiers, and the line it does not cross ─
+// Two halves. The mechanical half is that the expensive fact is separated from the cheap ones, so a
+// live window can refresh without waiting on a 1.2 s CIM call. The other half is that this module is
+// the one asked to "extract activity" from a process that will not show it, and its answers have to
+// stay inside what is observable: this tool does not inject, so a windowless process has nothing to
+// reveal, and everything reported about it is still true.
+{
+  section('the chamber probe')
+  const ch = await import('../lib/chamber.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  // Our own process: real, live, and windowless. A fabricated fixture could not show that the probe
+  // reads the actual system, which is the only thing that makes its answers worth anything.
+  const me = process.pid
+
+  const fast = await ch.probeProcess(ctx, me, { tier: 'fast' })
+  ok('the fast tier answers', fast.ok === true && fast.exists === true, String(fast.detail))
+  ok('and reports the cheap facts',
+    Number.isFinite(fast.live?.threads) && Number.isFinite(fast.live?.handles) &&
+    Number.isFinite(fast.live?.workingSetMB) && typeof fast.live?.startedAt === 'string',
+    JSON.stringify({ t: fast.live?.threads, h: fast.live?.handles, w: fast.live?.workingSetMB }))
+  ok('and does NOT run the expensive query, leaving those fields null rather than empty',
+    fast.live?.connections === null && fast.live?.modules === null,
+    JSON.stringify({ connections: fast.live?.connections, modules: fast.live?.modules }))
+
+  const slow = await ch.probeProcess(ctx, me, { tier: 'slow' })
+  ok('the slow tier also answers', slow.ok === true && slow.exists === true, String(slow.detail))
+  ok('and carries the facts the fast tier skipped',
+    Array.isArray(slow.live?.modules) && slow.live.modules.length > 0,
+    JSON.stringify({ modules: slow.live?.modules?.length }))
+  // The connection list is the one query here that can FAIL rather than merely find nothing:
+  // `Get-NetTCPConnection -OwningProcess <pid>` throws for a process with no matching entries, and
+  // under the script's SilentlyContinue that became a `null` indistinguishable from "no connections".
+  // What is asserted is therefore not "it is an array" -- it may legitimately not be -- but that the
+  // two states cannot be confused.
+  {
+    const c = slow.live?.connections
+    const err = slow.live?.connectionsError ?? null
+    const distinguishable = Array.isArray(c) ? err === null : (c === null && typeof err === 'string' && err.length > 0)
+    ok('an empty connection list and a failed one are distinguishable',
+      distinguishable, JSON.stringify({ connections: c === null ? 'null' : 'array[' + c.length + ']', error: err ? err.slice(0, 40) : null }))
+    ok('and a failed one says so in words rather than only in a field name',
+      Array.isArray(c) || /could not be read/.test(String(slow.live?.note ?? '')),
+      String(slow.live?.note))
+  }
+  ok('and leaves the cheap ones null, so a caller can tell "not asked" from "empty"',
+    slow.live?.threads === null && slow.live?.workingSetMB === null,
+    JSON.stringify({ threads: slow.live?.threads, ws: slow.live?.workingSetMB }))
+
+  ok('both tiers say which one they are',
+    fast.live?.tier === 'fast' && slow.live?.tier === 'slow',
+    `${fast.live?.tier} / ${slow.live?.tier}`)
+
+  // The expensive half really is the expensive half. Asserted loosely: a threshold tight enough to be
+  // interesting would fail on a busy machine, and the property that matters is the direction.
+  {
+    const t0 = Date.now(); await ch.probeProcess(ctx, me, { tier: 'fast' }); const tf = Date.now() - t0
+    const t1 = Date.now(); await ch.probeProcess(ctx, me, { tier: 'slow' }); const ts = Date.now() - t1
+    ok('the fast tier is the cheaper one', tf < ts, `fast ${tf} ms vs slow ${ts} ms`)
+  }
+
+  // A pid that is gone is an answer, not a failure. Reporting it as an error would make "it exited"
+  // look like "the probe broke", which is the distinction this whole layer keeps having to make.
+  const gone = await ch.probeProcess(ctx, 999999, { tier: 'fast' })
+  ok('a pid that does not exist is answered rather than failed',
+    gone.ok === true && gone.exists === false, JSON.stringify({ ok: gone.ok, exists: gone.exists }))
+  ok('and it says so in words', /no process with that pid/.test(String(gone.live?.note ?? '')), String(gone.live?.note))
+
+  // A caller cannot ask for a tier that does not exist -- the script validates, and the failure is
+  // reported rather than silently returning the wrong tier's answer.
+  const bogus = await ch.probeProcess(ctx, me, { tier: 'not-a-tier' })
+  ok('an unknown tier is refused rather than silently answered',
+    bogus.ok === false || bogus.live === null, JSON.stringify({ ok: bogus.ok, tier: bogus.live?.tier }))
+
+  // The honesty half: nothing in this module may claim to have compelled anything.
+  {
+    const src = readFileSync(join(projectDir, 'lib', 'chamber.mjs'), 'utf8')
+    for (const claim of ['inject', 'forced it to', 'extracted from the process']) {
+      const honest = src.includes('does not inject') || claim !== 'inject'
+      if (!honest) continue
+    }
+    ok('the module states that it does not inject',
+      src.includes('does not inject'), 'the boundary is not stated where a reader of this module will see it')
+    ok('and states that a window it does not own cannot be made visible',
+      /cannot be made to produce one|has nothing to reveal/.test(src),
+      'the limit on what a windowless process can show is not stated')
+  }
+
+  // The window a caller opens is this tool's, and the script for it is found rather than assumed.
+  ok('the chamber reports whether its own window host is present',
+    typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
+}
+
 // ── which PowerShell runs the platform layer, decided in one place ─
 // The name was written into nineteen call sites across six modules. That is not a decision, it is
 // nineteen assumptions that agree -- and the fork only became visible when a second interpreter

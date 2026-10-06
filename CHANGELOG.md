@@ -2,7 +2,40 @@
 
 ## Unreleased
 
+### Added
+
+- **The chamber probe, tiered, and the first honest measurement of what it can see.** A window meant to
+  be watched cannot spend its refresh budget on the one call that costs more than the refresh
+  interval, so the parts are separated by cost rather than kept on one timer:
+  - `Get-NetTCPConnection` **1277 ms**, against `Get-Process` 71 ms, `.Modules` 64 ms and window
+    enumeration 61 ms. Measured end to end: **fast 686 ms / 410 bytes, slow 2116 ms / 2744 bytes.**
+  - Both tiers carry every key, with the ones they did not collect left `null` -- so a caller can tell
+    "not asked" from "empty", and does not have to branch on which fields exist.
+  - **What it can see, stated because the caller relies on it:** every top-level window the process
+    owns *including hidden ones* (hiding is exactly what a process that does not want to be seen would
+    do), and its threads, handles, memory, CPU, start time, path, connections and modules. **What it
+    cannot see: anything internal.** This tool does not inject, so a process with no window has nothing
+    to reveal -- and everything reported about it is still true, which is where the honest capability
+    lives.
+  - **A failed query and an empty one are now distinguishable.** `Get-NetTCPConnection -OwningProcess`
+    *throws* for a process with no matching entries rather than returning an empty set, and under the
+    script's `SilentlyContinue` that produced a `null` where a caller expects an array -- so "no
+    connections" and "the query did not run" were the same answer. The failure is caught and named.
+  - **Two bugs found by measuring rather than by reading**, both of the same shape -- a wrong answer
+    that looked like a working one: `$out['modules'] += ...` from a null is *string concatenation* in
+    PowerShell, so the JSON carried one enormous joined string instead of an array; and a parameter
+    named `$Out` shadowed PowerShell's automatic output variable (`$out`, case-insensitive), producing
+    a script that exited 0 with no output while an `OrderedDictionary`'s type name ended up as a FILE
+    in the working directory.
+
 ### Changed
+
+- **Art and UI are pixel art, as a standing constraint.** Recorded in the design rather than left as a
+  preference: a pixel does not dissemble -- it is either there or it is not -- and soft edges and blur
+  are the techniques you reach for when a boundary should be unclear. This tool exists so that "I do
+  not know what happened" stops happening. The existing character sheet is a soft, painterly
+  illustration drawn before this constraint; it remains a reference for what the character looks like
+  and is not a sample of how this project's art is rendered.
 
 - **Which PowerShell runs the platform layer is now decided in one place, on measurement.** The name
   was written into **24 call sites across nine modules** -- not a decision, but twenty-four assumptions

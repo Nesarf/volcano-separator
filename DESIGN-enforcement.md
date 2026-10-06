@@ -434,7 +434,27 @@ outside is a legitimate design; a room the tool itself cannot open is not.** So 
 same requirement as everything else here: the way out is documented, printed, and works without this
 tool running.
 
-### 12.5 Default off, and why
+### 12.5 Art and UI are pixel art (2026-10-06)
+
+Every art asset and every piece of UI this project grows is **pixel art**. A standing constraint, not
+a preference for one screen.
+
+The reason is the same one that runs through this whole document: **a pixel does not dissemble.** It is
+either there or it is not, and magnifying it shows exactly that. This tool exists so that "I do not
+know what happened" stops happening, and soft edges, gradients and antialiased blur are the techniques
+you reach for when you want a boundary to be unclear. Pixel art is the only visual medium that is
+*itself* made of discrete cells -- which is what the tool actually produces: an event stream, one
+record at a time.
+
+It has a second property worth naming: its limits are honest. At a given resolution you cannot draw
+detail, and not being able to draw it is visible rather than hidden. That matches the rule this project
+applies everywhere else -- `unknown != zero` -- better than any smoother style could.
+
+**The existing character sheet is not a counterexample**: it is a soft, painterly Japanese illustration,
+commissioned before this constraint existed. It remains good as a reference for *what she looks like*
+and is not a sample of how this project's art is rendered. Those are two different questions.
+
+### 12.6 Default off, and why
 
 The mechanism is a persistent suspension of a running program, presented prominently. Two of the three
 failure modes it can cause are quiet:
