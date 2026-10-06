@@ -365,8 +365,13 @@ async function main() {
         const h = rec.health
         const lost = h.eventsDropped > 0 ? C.red(`${h.eventsDropped} lost`) : `${h.eventsDropped} lost`
         const errs = h.handlerErrors > 0 ? C.red(`${h.handlerErrors} handler error(s)`) : `${h.handlerErrors} handler error(s)`
+        // An equation that does not hold is worse than no equation. `written` also counts rows from
+        // outside the event stream (the watcher's own start, the baseline), so asserting that the
+        // parts sum to `seen` -- as an earlier version did -- printed arithmetic that was visibly
+        // wrong. The counters are listed, not made to add up.
         console.log(C.dim(`             pid ${h.pid}, up ${h.uptimeSeconds}s, ${h.passes} pass(es); ` +
-          `seen ${h.eventsSeen} = written ${h.eventsWritten} + self ${h.eventsSelf} + duplicate ${h.eventsDuplicate}; ${lost}, ${errs}`))
+          `events: ${h.eventsSeen} seen, ${h.eventsDuplicate} repeat(s), ${h.eventsSelf} own, ` +
+          `${h.eventsAccepted} distinct -> ${h.eventsWritten} row(s) written; ${lost}, ${errs}`))
         if (h.lockNote) console.log(C.yellow(`             ${h.lockNote}`))
       } else if (rec.health) {
         console.log(C.dim(`             ${rec.health.detail}`))

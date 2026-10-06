@@ -2269,7 +2269,9 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     JSON.stringify({ t: now.toISOString(), kind: 'proc-start', pid: 1, name: 'x.exe' }) + String.fromCharCode(10))
   const probe = await g.probeActivityRecorder(ctx)
   ok('the probe reports the lost rows in its own words',
-    /wrote 45 of 1000 seen/.test(probe.detail) && /5 lost/.test(probe.detail), probe.detail)
+    /45 row\(s\) written/.test(probe.detail) && /5 lost/.test(probe.detail), probe.detail)
+  ok('and does not print a fraction of two counts that do not compose',
+    !/of 1000 seen/.test(probe.detail), probe.detail)
 
   // A stale snapshot is the honest signal that the recorder is not running -- and it must not be
   // satisfied by an old record file that still has recent-looking events in it.
