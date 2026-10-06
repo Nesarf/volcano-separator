@@ -12,7 +12,7 @@
     the thing you are worried about is still exactly where it was, so a bug costs disk space and an
     apology rather than a toolchain and an afternoon. `--move` is the operation that can cost the
     afternoon, so it is the one that must be asked for by name.
-  - **One store per volume** (`<volume>\.volcano-separatorault\`), not one central store. A
+  - **One store per volume** (`<volume>\.volcano-separator\vault\`), not one central store. A
     central store makes every vaulting a cross-volume copy: write elsewhere, verify, then delete the
     original -- a window in which both copies exist or neither does, which is exactly the shape of
     "if this goes wrong, someone loses their file". On the same volume, a move is a rename.
@@ -103,7 +103,7 @@
   Measured after the fix: the count of scratch-path rows in the live record no longer changes when the
   suite runs.
   - The deeper cause was found while fixing it: **`detain.ps1` never declared `-ActivityDir`,** so its
-    explicit directory was rejected and the summary always went to `%TEMP%olcano-separatorctivity`
+    explicit directory was rejected and the summary always went to `%TEMP%\volcano-separator\activity`
     -- which is the same path the Node side derives *only when `logDir` is unset*. With any log
     directory override the summary was written to one place and looked for in another, and a freeze
     that had worked perfectly read as "detain produced no summary". `isolate.ps1` already declared it.
