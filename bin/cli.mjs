@@ -361,6 +361,16 @@ async function main() {
       console.log(`  daemon     ${daemon.ok ? C.green('up  ') : C.red('DOWN')}  ${daemon.detail}`)
       console.log(`  watchdog   ${svc.installed ? C.green('on  ') : C.yellow('off ')}  ${svc.installed ? `${svc.state}, last ${svc.lastRun} -> ${svc.lastResult}` : 'not installed'}`)
       console.log(`  recorder   ${rec.ok ? C.green('on  ') : C.yellow('off ')}  ${rec.detail}`)
+      if (rec.health?.known) {
+        const h = rec.health
+        const lost = h.eventsDropped > 0 ? C.red(`${h.eventsDropped} lost`) : `${h.eventsDropped} lost`
+        const errs = h.handlerErrors > 0 ? C.red(`${h.handlerErrors} handler error(s)`) : `${h.handlerErrors} handler error(s)`
+        console.log(C.dim(`             pid ${h.pid}, up ${h.uptimeSeconds}s, ${h.passes} pass(es); ` +
+          `seen ${h.eventsSeen} = written ${h.eventsWritten} + self ${h.eventsSelf} + duplicate ${h.eventsDuplicate}; ${lost}, ${errs}`))
+        if (h.lockNote) console.log(C.yellow(`             ${h.lockNote}`))
+      } else if (rec.health) {
+        console.log(C.dim(`             ${rec.health.detail}`))
+      }
       console.log('')
       if (procs.length === 0) console.log(C.dim('  no stack processes'))
       for (const p of procs) {

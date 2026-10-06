@@ -2186,6 +2186,111 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // And the claim it makes about itself has to be the true one.
   ok('the comment does not claim it sees the past',
     /started AND exited before this/.test(src), 'the boundary is not stated')
+
+  // The counters must survive a read that fails. The snapshot is the only thing that can report a
+  // failure, so a guard that lets one exception stop it being written makes the recorder silent about
+  // its own state while still recording events -- which is exactly what happened in production before
+  // the reads were wrapped.
+  ok('the health snapshot is written even if reading the subscription state throws',
+    /try \{ \$sub = \[bool\]\(Get-EventSubscriber/.test(src),
+    'Get-EventSubscriber is not guarded, so a throw there leaves the snapshot unwritten')
+  ok('the duplicate filter keys on the kernel stamp rather than a field the payload repeats',
+    /\$d\.TIME_CREATED/.test(src), 'duplicates are not recognised by TIME_CREATED')
+
+  // And the ORDER of those two tests decides whether the counters mean anything.
+  //
+  // WMI delivers one trace record many times over: measured on this machine, 3,300 deliveries in 11 s
+  // that were 3 distinct events, and once 10,500 in 31 s that was one. With the identity test first,
+  // every redelivery of one event was counted as a fresh discarding of our own process -- the
+  // snapshot read 105,203 "self" events over five minutes against 9 rows written, which looks like a
+  // hard-working recorder and was one event repeated. A filter placed before the dedupe cannot see
+  // how much of the stream is repetition.
+  const dedupeAt = src.indexOf('$script:Counters.eventsDuplicate++')
+  const selfAt = src.indexOf('$script:Counters.eventsSelf++')
+  ok('the duplicate filter runs before the identity test',
+    dedupeAt !== -1 && selfAt !== -1 && dedupeAt < selfAt,
+    `dedupe at ${dedupeAt}, self-filter at ${selfAt} -- the dedupe must come first`)
+  ok('and the recorder counts what it discarded as a repeat, rather than only what it wrote',
+    /eventsDuplicate/.test(src) && /eventsSelf/.test(src), 'the discarded totals are not published')
+}
+
+// ── the recorder's own account of what it wrote ─
+// A reader could previously only ask "is the newest event recent?", and that question has the same
+// answer for a recorder that is working and one whose every write is failing -- because the events
+// that would have made the file look stale are the ones that never arrived. Silence read as calm.
+//
+// These tests exercise the reader against synthetic snapshots rather than a live recorder: what is
+// being asserted is how absence, staleness and dropped rows are reported, and those are decided here,
+// not by the writing side.
+{
+  section('recorder health')
+  const g = await import('../lib/core.mjs')
+  const dir = join(tmpdir(), 'vsep-rechealth-' + process.pid)
+  const act = join(dir, 'activity')
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(act, { recursive: true })
+  const ctx = { ...g.resolveContext({}), logDir: dir }
+
+  // No snapshot at all: a recorder too old to publish one must not read as healthy and complete.
+  const absent = g.readRecorderHealth(ctx)
+  ok('an absent health snapshot is reported as unknown, not as healthy',
+    absent.known === false, JSON.stringify(absent))
+  ok('and it says so in words a reader can act on',
+    /does not publish one/.test(absent.detail ?? ''), absent.detail)
+
+  // A fresh snapshot with a dropped row: the row count is the fact that must not be rounded away.
+  const now = new Date()
+  writeFileSync(join(act, 'recorder-health.json'), JSON.stringify({
+    pid: 4242, startedAt: now.toISOString(), t: now.toISOString(), uptimeSeconds: 120,
+    passes: 900, iterations: 900, subscribed: true, subscribedStop: true, lockTaken: true,
+    eventsSeen: 1000, eventsSelf: 900, eventsDuplicate: 50, eventsWritten: 45,
+    eventsDropped: 5, handlerErrors: 2, lockNote: '',
+  }))
+  const h = g.readRecorderHealth(ctx)
+  ok('a fresh snapshot is known and fresh', h.known === true && h.fresh === true, JSON.stringify(h))
+  ok('and it carries the drop count rather than a summary',
+    h.eventsDropped === 5 && h.eventsWritten === 45 && h.eventsSeen === 1000, JSON.stringify(h))
+  ok('and the handler errors separately, because they are a different failure',
+    h.handlerErrors === 2, JSON.stringify(h))
+
+  // The probe must fold that into its verdict: seen != written is not the same as stopped. It needs a
+  // record to be there at all -- "no record" is a different verdict, and it is the right one to give
+  // when there is nothing to read.
+  writeFileSync(join(act, 'activity-2026-01-01.ndjson'),
+    JSON.stringify({ t: now.toISOString(), kind: 'proc-start', pid: 1, name: 'x.exe' }) + String.fromCharCode(10))
+  const probe = await g.probeActivityRecorder(ctx)
+  ok('the probe reports the lost rows in its own words',
+    /wrote 45 of 1000 seen/.test(probe.detail) && /5 lost/.test(probe.detail), probe.detail)
+
+  // A stale snapshot is the honest signal that the recorder is not running -- and it must not be
+  // satisfied by an old record file that still has recent-looking events in it.
+  const old = new Date(Date.now() - 600 * 1000)
+  writeFileSync(join(act, 'recorder-health.json'), JSON.stringify({
+    pid: 4242, t: old.toISOString(), startedAt: old.toISOString(), subscribed: true,
+    eventsSeen: 10, eventsWritten: 10, eventsDropped: 0, eventsSelf: 0, eventsDuplicate: 0,
+    handlerErrors: 0, passes: 1, iterations: 1,
+  }))
+  const stale = g.readRecorderHealth(ctx)
+  ok('a stale snapshot is not fresh', stale.known === true && stale.fresh === false, JSON.stringify(stale))
+  ok('and the age is reported so the reader can judge it', stale.ageSeconds >= 599, String(stale.ageSeconds))
+
+  // A subscription that is not live is its own finding: it can be true while the process is otherwise
+  // healthy, and it means the record is missing process starts it will never get back.
+  writeFileSync(join(act, 'recorder-health.json'), JSON.stringify({
+    pid: 4242, t: new Date().toISOString(), subscribed: false, subscribedStop: true,
+    eventsSeen: 10, eventsWritten: 10, eventsDropped: 0, eventsSelf: 0, eventsDuplicate: 0,
+    handlerErrors: 0, passes: 1, iterations: 1,
+  }))
+  const unsub = g.readRecorderHealth(ctx)
+  ok('a dead subscription is visible in the snapshot', unsub.subscribed === false, JSON.stringify(unsub))
+
+  // A corrupt snapshot is not a healthy one either.
+  writeFileSync(join(act, 'recorder-health.json'), '{ this is not json')
+  const broken = g.readRecorderHealth(ctx)
+  ok('a corrupt snapshot is reported as unreadable rather than assumed fine',
+    broken.known === false && /could not be read/.test(broken.detail), JSON.stringify(broken))
+
+  rmSync(dir, { recursive: true, force: true })
 }
 
 // ── two runs in the same second must not share a transcript ─

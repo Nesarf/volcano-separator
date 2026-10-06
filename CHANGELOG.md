@@ -4,6 +4,52 @@
 
 ### Fixed
 
+- **The recorder duplicated its own record, and could not have told anyone.** WMI hands the same
+  `Win32_ProcessStartTrace` record back many times (measured on this machine: 3,300 deliveries in
+  11 s that were 3 distinct events, and once 10,500 in 31 s that was one). Each copy was written as
+  its own row, so a reader counting "how often did this program run" got a number hundreds of times
+  the truth -- a record that inflates its own findings is the failure this project exists to remove,
+  and the recorder was committing it. Copies are now recognised by `TIME_CREATED`, the kernel's own
+  stamp for the event, since every wrapper around one event carries the same value.
+  - **The dedupe has to run before the identity test, and that order is the fix.** With the
+    self-filter first, every redelivery of one event was counted as a fresh discarding of our own
+    process: the snapshot read 105,203 "self" events over five minutes against 9 rows written, which
+    looks like a hard-working recorder and was one event repeated. A filter placed before the dedupe
+    cannot see how much of the stream is repetition. The ordering is now asserted, and the assertion
+    was verified to fail when the two lines are swapped.
+  - The process detail lookup is cached per pid, because a process produces at most a start and a
+    stop and each lookup is a WMI round trip.
+  - **Not fixed, and measured rather than implied:** the stream still arrives at roughly 340
+    deliveries/second while it is happening, which costs about two thirds of a core for its
+    duration. Discarding repeats in the subscription's `-Action` block would keep them out of the
+    queue, and was tried and rejected: PowerShell only delivers an event when the action emits
+    something, so a filtering action silently swallowed the events it meant to keep (observed as
+    `seen=0` while rows were still being written), and CPU did not improve because the loop was
+    driven at the same rate either way. The verifiable filter in the loop is the one that stayed.
+- **Everything periodic only ran when something had happened.** The window sampler, the persistence
+  comparison and the pruning all sat below the event handling, so on a quiet machine they did not run
+  at all: the check that catches a Run key added and removed between two passes was the *last* thing
+  to happen once events stopped, and its silence was indistinguishable from calm. Every pass now
+  reaches the bottom of the loop.
+- **The recorder could not report a failure to write, which is why nobody noticed.** `Write-Event`
+  ended in an empty `catch`, so a row that could not be written vanished while its absence said
+  nothing. A reader could only ask "is the newest event recent?", and a recorder whose every write is
+  failing answers that exactly like a quiet machine -- the events that would make the file look stale
+  are the ones that never arrive. Silence read as calm.
+
+### Added
+
+- **The recorder publishes its own counters** to `recorder-health.json` beside the record: events
+  seen, written, dropped, discarded as its own, discarded as duplicates, handler errors, passes, and
+  the state of both WMI subscriptions. It is rewritten every few seconds with a temp-file-then-rename
+  write, so its *staleness* is the honest signal that the recorder is not running, while the numbers
+  are the only way to tell "nothing happened" from "nothing was recorded".
+  - Written defensively: nothing that reads state for the snapshot may prevent it being written, since
+    the snapshot is the only thing that can report a failure. An unguarded `Get-EventSubscriber` did
+    prevent it in production -- the recorder went on recording while saying nothing about itself.
+  - `volcano-separator ps` now prints the breakdown, and an absent or unreadable snapshot is reported
+    as unknown rather than as healthy. A recorder too old to publish one does not read as complete.
+
 - **`cache --apply` carried out a list nobody had reviewed.** `--prune` built a plan and showed it;
   `--apply` threw that away and rescanned, so the removals that actually ran were whatever the cache
   looked like at that moment. A plan reviewed as "remove 40 entries, free 0.07 GB" could execute as

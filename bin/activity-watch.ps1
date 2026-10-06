@@ -24,6 +24,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $script:SelfPid = $PID
+$script:StartedAt = Get-Date
 
 # Redaction lives in its own file so the smoke suite can exercise the rules without starting the
 # recorder (the main loop below runs on load, so this script cannot be dot-sourced).
@@ -101,6 +102,34 @@ function Write-OwnerPid {
     $Stream.Flush()
 }
 
+# Counters for this process, and the file they are published to.
+#
+# Why they exist at all: a reader could previously only ask "is the newest event recent?", and that
+# question gives the same answer for a recorder that is working and for one whose every write is
+# failing -- because the events that would have made the file look stale are the ones that never
+# arrived. Silence read as calm. These numbers are the difference between "nothing happened" and
+# "nothing was recorded".
+#
+# The reader-side contract, stated here because it decides the design: a stale snapshot is the honest
+# signal that the recorder is not running. Numbers describe the write path; freshness describes
+# whether anything is still doing the writing. Neither alone is enough.
+$script:Counters = @{
+    passes        = 0
+    iterations    = 0   # turns of the main loop; compared against eventsSeen to show wake-ups that
+                        # carried no event, which is what a spinning Wait-Event looks like
+    eventsSeen    = 0   # process events handed to us by WMI
+    eventsSelf    = 0   # ...of which we discarded as our own process
+    eventsDuplicate = 0 # ...of which reached the queue as a repeat rather than being dropped early
+    eventsAccepted  = 0 # distinct events that reached the handler
+    eventsWritten = 0   # rows that reached the log
+    eventsDropped = 0   # rows we tried to write and could not
+    handlerErrors = 0   # exceptions while handling an event, before any write was attempted
+}
+$script:HealthFile = Join-Path $LogDir 'recorder-health.json'
+$script:LastHealthWrite = [datetime]::MinValue
+$script:SeenStamps = @{}
+$script:DetailCache = @{}
+
 try {
     $script:InstanceLock = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
     Write-OwnerPid $script:InstanceLock
@@ -158,14 +187,72 @@ function Write-Event {
     # Open, write, close -- and allow readers in while we do it. Add-Content can end up holding
     # an exclusive handle, and a record nobody can read is not a record: the reader gets EBUSY,
     # concludes there is no recorder, and the tool reproduces the invisibility it exists to fix.
+    #
+    # This is the one place that knows whether a row was written. The empty catch that used to be here
+    # threw that knowledge away while keeping the row's absence: the event vanished and nothing said
+    # so. Counting it is the whole point -- the record cannot be trusted to describe its own gaps, so
+    # the count has to live outside it.
+    $written = $false
     try {
         $fs = [System.IO.File]::Open($file, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
         try {
             $bytes = [System.Text.Encoding]::UTF8.GetBytes(('{' + $line + '}') + [char]10)
             $fs.Write($bytes, 0, $bytes.Length)
             $fs.Flush()
+            $written = $true
         } finally { $fs.Dispose() }
     } catch { }
+    if ($written) { $script:Counters.eventsWritten++ } else { $script:Counters.eventsDropped++ }
+}
+
+# Publish those counters where a reader can find them, and keep the file fresh enough that its
+# staleness means something. Temp file then rename, so a reader racing this never parses half a
+# snapshot -- the same rule as the policy file, for the same reason.
+#
+# Throttled by time rather than by pass count: passes are event-driven, so on a quiet machine a
+# pass-counted snapshot would be written once an hour and its staleness would then mean nothing.
+function Save-Health {
+    param([switch]$Force)
+    $now = Get-Date
+    if (-not $Force -and ($now - $script:LastHealthWrite).TotalSeconds -lt 10) { return }
+
+    # Every read that feeds this snapshot is defensive, and that is the point: the snapshot is the
+    # only thing that can report a failure, so nothing here may be able to stop it being written.
+    # An earlier version called Get-EventSubscriber unguarded; if that throws, the exception leaves
+    # this function before the file is written and the recorder goes silent about its own state while
+    # still recording events -- the exact shape of failure this file exists to make impossible.
+    $sub = $false
+    $subStop = $false
+    try { $sub = [bool](Get-EventSubscriber -SourceIdentifier VSProcStart -ErrorAction SilentlyContinue) } catch { }
+    try { $subStop = [bool](Get-EventSubscriber -SourceIdentifier VSProcStop -ErrorAction SilentlyContinue) } catch { }
+
+    $state = @{
+        pid            = $PID
+        startedAt      = $(try { $script:StartedAt.ToString('o') } catch { '' })
+        lockTaken      = [bool]$script:LockTaken
+        subscribed     = $sub
+        subscribedStop = $subStop
+        eventsSeen     = $script:Counters.eventsSeen
+        eventsSelf     = $script:Counters.eventsSelf
+        eventsDuplicate = $script:Counters.eventsDuplicate
+        eventsAccepted = $script:Counters.eventsAccepted
+        selfPid        = $script:SelfPid
+        eventsWritten  = $script:Counters.eventsWritten
+        eventsDropped  = $script:Counters.eventsDropped
+        handlerErrors  = $script:Counters.handlerErrors
+        passes         = $script:Counters.passes
+        iterations     = $script:Counters.iterations
+        lockNote       = $script:LockNote
+        uptimeSeconds  = [int]($now - $script:StartedAt).TotalSeconds
+        t              = $now.ToString('o')
+    }
+    try {
+        $json = ($state | ConvertTo-Json -Compress)
+        $tmp = $script:HealthFile + '.tmp'
+        [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:HealthFile -Force
+    } catch { }
+    $script:LastHealthWrite = $now
 }
 
 function Prune-Old {
@@ -284,6 +371,13 @@ Write-Event @{ kind = 'watcher'; action = 'start'; pid = $script:SelfPid; note =
 # What no ordering can fix, stated rather than implied: a process that started AND exited before this
 # line is in neither. Nothing observes the past. The baseline records `subscribed` so the boundary is
 # legible in the record instead of being a matter of trust.
+# Dedupe happens in the loop, not in an -Action block, and that is a decision with a measurement
+# behind it. An action block CAN drop a repeat before it is queued, but PowerShell only delivers an
+# event when the block emits something, so a block that filters silently also swallows the events it
+# meant to keep -- observed here as seen=0 while rows were still being written. Getting that right is
+# possible and was not worth it: the stream arrives at ~340 deliveries/second either way, so the
+# action saved queue entries while the loop was still driven at the same rate and CPU did not move.
+# The in-loop filter below is the one that is verifiably correct, so it is the one that stays.
 Register-CimIndicationEvent -Query 'SELECT * FROM Win32_ProcessStartTrace' -SourceIdentifier VSProcStart -ErrorAction SilentlyContinue | Out-Null
 Register-CimIndicationEvent -Query 'SELECT * FROM Win32_ProcessStopTrace'  -SourceIdentifier VSProcStop  -ErrorAction SilentlyContinue | Out-Null
 
@@ -306,16 +400,63 @@ Write-Event @{
 $pass = 0
 $lastPrune = Get-Date
 
+# Every pass reaches the bottom of this loop, whether or not anything happened.
+#
+# That is a fix, not a tidy-up. Everything below the event handling -- the window sampler, the
+# persistence comparison, the pruning -- used to run only when Wait-Event returned something, so on a
+# quiet machine they did not run at all. The comparison that catches a Run key added and removed
+# between two passes was therefore the *last* thing to happen once events stopped, and its silence was
+# indistinguishable from calm. A recorder whose periodic work only occurs when the machine is busy is
+# a recorder that stops when it matters.
+Save-Health -Force
+
 while ($true) {
+    $script:Counters.iterations++
     $ev = Wait-Event -Timeout 2
     if ($ev) {
         foreach ($e in $ev) {
+            $script:Counters.eventsSeen++
             try {
                 $d = $e.SourceEventArgs.NewEvent
                 $procId = [int]$d.ProcessID
-                if ($procId -eq $script:SelfPid) { continue }
+
+                # Dedupe FIRST, decide identity second. The order is the whole fix.
+                #
+                # WMI hands the same trace record back many times -- measured here as 6,000
+                # deliveries in 25 s that were 16 distinct events. When the identity test ran first,
+                # every redelivery of one event was counted as a fresh discarding of our own process:
+                # the health snapshot showed 105,203 "self" events over five minutes against 9 rows
+                # written, which read as a busy recorder and was really one event repeated. A filter
+                # placed before the dedupe cannot see how much is repetition, so it reports the storm
+                # as its own workload.
+                # The primary filter, and it must run BEFORE the identity test below. WMI hands the
+                # same trace record back many times -- measured here as 10,500 deliveries in 31 s
+                # that were one distinct event. With the identity test first, every redelivery of one
+                # event counted as a fresh discarding of our own process: the snapshot showed 105,203
+                # "self" events over five minutes against 9 rows written, which read as a busy
+                # recorder and was one event repeated. A filter placed before the dedupe cannot see
+                # how much of the stream is repetition, so it reports the storm as its own workload.
+                $stamp = [string]$d.TIME_CREATED + ':' + $e.SourceIdentifier
+                if ($script:SeenStamps.ContainsKey($stamp)) {
+                    $script:Counters.eventsDuplicate++
+                    continue
+                }
+                $script:SeenStamps[$stamp] = 1
+                if ($script:SeenStamps.Count -gt 4000) { $script:SeenStamps.Clear() }
+                $script:Counters.eventsAccepted++
+
+                if ($procId -eq $script:SelfPid) { $script:Counters.eventsSelf++; continue }
+
                 if ($e.SourceIdentifier -eq 'VSProcStart') {
-                    $detail = Get-ProcDetail -ProcessId $procId
+                    # One WMI query per process, not per event. The delivery storm made this the
+                    # difference between a few queries a second and hundreds.
+                    if ($script:DetailCache.ContainsKey($procId)) {
+                        $detail = $script:DetailCache[$procId]
+                    } else {
+                        $detail = Get-ProcDetail -ProcessId $procId
+                        if ($script:DetailCache.Count -gt 2000) { $script:DetailCache.Clear() }
+                        $script:DetailCache[$procId] = $detail
+                    }
                     Write-Event @{
                         kind = 'proc-start'; pid = $procId
                         ppid = $(if ($detail) { $detail.ppid } else { [int]$d.ParentProcessID })
@@ -327,7 +468,11 @@ while ($true) {
                 } else {
                     Write-Event @{ kind = 'proc-stop'; pid = $procId; name = [string]$d.ProcessName }
                 }
-            } catch { }
+            } catch {
+                # Counted rather than swallowed. An event that raised on the way in never reached the
+                # write path, so it is not a dropped write -- and the two need different reactions.
+                $script:Counters.handlerErrors++
+            }
             Remove-Event -EventIdentifier $e.EventIdentifier -ErrorAction SilentlyContinue
         }
     }
@@ -336,8 +481,8 @@ while ($true) {
 
     # Persistence surfaces are the part that catches the quiet kind. Cheap keys every pass,
     # scheduled tasks less often because enumerating them is not free.
-    $pass++
-    if ($pass % 30 -eq 0) {
+    $script:Counters.passes++
+    if ($script:Counters.passes % 30 -eq 0) {
         $runNow = Get-RunKeys
         Compare-Surface -Surface 'RunKeys' -Before $runBefore -After $runNow
         $runBefore = $runNow
@@ -345,11 +490,13 @@ while ($true) {
         Compare-Surface -Surface 'StartupFolder' -Before $startupBefore -After $startupNow
         $startupBefore = $startupNow
     }
-    if ($pass % (30 * $TasksEveryNthPass) -eq 0) {
+    if ($script:Counters.passes % (30 * $TasksEveryNthPass) -eq 0) {
         $tasksNow = Get-TaskList
         Compare-Surface -Surface 'ScheduledTasks' -Before $tasksBefore -After $tasksNow
         $tasksBefore = $tasksNow
     }
 
     if (((Get-Date) - $lastPrune).TotalMinutes -gt 30) { Prune-Old; $lastPrune = Get-Date }
+
+    Save-Health
 }
