@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **[`TODO.md`](TODO.md)** -- agreed work that is not done, with what is measured and what would count
+  as finished. First entry: the supervisor knows one specific stack (`uv` → Hindsight → its embedded
+  PostgreSQL) and should be able to supervise a comparable local service. The coupling was measured
+  rather than assumed: 45 occurrences of `hindsight` over seven modules, and the blockers are not the
+  ones that look obvious -- the profile name, the ports and the cache directory are already
+  configurable, while the directory layout, the derived database instance name, and **the health
+  model itself** (`GET /health` as readiness, `/health/live` as liveness, PostgreSQL wire protocol
+  for the database) are not.
+
 ### Fixed
 
 - **The recorder duplicated its own record, and could not have told anyone.** WMI hands the same

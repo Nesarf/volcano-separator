@@ -282,6 +282,13 @@ taskName: 'Volcano-Separator',
 taskIntervalMinutes: 5,
 ```
 
+## Planned
+
+Agreed work that is not done, each with what is measured and what would count as finished, is in
+[`TODO.md`](TODO.md). The first entry is the largest: today the supervisor knows one specific stack
+(`uv` → the Hindsight daemon → its embedded PostgreSQL), and it should be able to supervise a
+comparable local service without being rewritten.
+
 ## Requirements
 
 Node >= 20.12. Zero third-party dependencies. PowerShell for the platform layer.
