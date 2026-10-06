@@ -1294,8 +1294,19 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // Asserted on the source, because "it did not download this time" is not the property that
   // matters -- "it cannot download" is, and only the flag guarantees that.
   const src = libSource()
+  // A behaviour assertion, not a text one. This used to match the literal argument list, which broke
+  // the moment that list moved into the service descriptor -- a property of the file layout rather
+  // than of the code. What the check has always meant is "the probe cannot download", so that is now
+  // asked of the function that builds the arguments.
+  const svcMod = await import('../lib/service.mjs')
+  const offlineArgs = svcMod.serviceArgs(ctx.serviceDescriptor, ctx, { uvArgs: [], offline: true })
   ok('the probe resolves offline, so it cannot populate the cache it is measuring',
-    /uvFlags\(ctx\), '--offline', '--with'/.test(src), 'the --offline flag was dropped from the probe')
+    offlineArgs.ok === true && offlineArgs.args.includes('--offline'),
+    JSON.stringify(offlineArgs.ok ? offlineArgs.args : offlineArgs.detail))
+  const onlineArgs = svcMod.serviceArgs(ctx.serviceDescriptor, ctx, { uvArgs: [] })
+  ok('and the same builder leaves the network alone when it is not asked to be offline',
+    onlineArgs.ok === true && !onlineArgs.args.includes('--offline'),
+    JSON.stringify(onlineArgs.args))
   // The warm-up itself must still be allowed to download; that is its job.
   ok('the warm-up still runs online',
     !/--offline[\s\S]{0,200}warmBudgetMs/.test(src.slice(src.indexOf('export async function warm'))), 'the warm-up lost its network access')
@@ -2271,6 +2282,87 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // The library must not describe a mode as acting either.
   ok('the library does not describe a mode as acting',
     !lib.includes('enforcement is ON'), 'found in lib/')
+}
+
+// ── what is being supervised is a value, not a set of literals ─
+// Every path in resolveContext was built from a literal `~/.hindsight`, the daemon's module name was
+// spelled out in four separate argument lists, and "is it healthy" meant `GET /health` because that is
+// what this particular service answers. None of it was wrong; it was unexamined, which made "what this
+// tool supervises" a fact about the source code rather than something readable and replaceable.
+//
+// The extraction's claim is equivalence, so it is tested as a comparison against the values the
+// literals used to produce -- recomputed here rather than pasted, so the check does not decay into a
+// snapshot of one machine's home directory.
+{
+  section('the service descriptor')
+  const svc = await import('../lib/service.mjs')
+  const g = await import('../lib/core.mjs')
+  const { homedir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const bare = g.resolveContext({})
+  const d = svc.resolveServiceDescriptor({})
+  ok('the default descriptor resolves', d.ok === true && d.descriptor.id === 'hindsight', String(d.detail ?? d.id))
+
+  // An unknown id is an answer, never a silent fall back to the one that exists. Running the wrong
+  // service's commands is worse than running none.
+  const missing = svc.resolveServiceDescriptor({ service: 'not-a-service' })
+  ok('an unknown service id is refused rather than defaulted',
+    missing.ok === false && /no service descriptor/.test(missing.detail), String(missing.detail))
+
+  const home = homedir()
+  const p = svc.resolveServicePaths(d.descriptor, { profile: 'coding-agent' })
+  const expected = {
+    configFile: join(home, '.hindsight', 'coding-agent.json'),
+    serviceHome: join(home, '.hindsight'),
+    profileDir: join(home, '.hindsight', 'profiles'),
+    profileEnvFile: join(home, '.hindsight', 'profiles', 'coding-agent.env'),
+    profileLogFile: join(home, '.hindsight', 'profiles', 'coding-agent.log'),
+    profileLockFile: join(home, '.hindsight', 'profiles', 'coding-agent.lock'),
+    daemonLogFile: join(home, '.hindsight', 'daemon.log'),
+    dataDir: join(home, '.pg0', 'instances', 'hindsight-embed-coding-agent', 'data'),
+  }
+  for (const [k, want] of Object.entries(expected)) {
+    ok(`the descriptor resolves ${k} to what the literals produced`,
+      p[k] === want, `${p[k]} vs ${want}`)
+  }
+
+  // The context must carry them under the names callers already use, because an extraction that
+  // renamed things would be a redesign wearing an extraction's clothes.
+  for (const k of ['configFile', 'hindsightHome', 'profileDir', 'profileEnvFile', 'profileLogFile',
+                   'profileLockFile', 'daemonLogFile']) {
+    ok(`the context still exposes ${k}`, bare[k] === p[k], `${bare[k]} vs ${p[k]}`)
+  }
+  ok('and carries the descriptor itself, which is what the argument builders read',
+    bare.serviceDescriptor?.id === 'hindsight' && bare.runtimeModule === 'hindsight-embed',
+    `${bare.serviceDescriptor?.id} / ${bare.runtimeModule}`)
+
+  // The command line used to be spelled out in four places. One builder now, and the module name is
+  // the descriptor's.
+  const built = svc.serviceArgs(d.descriptor, bare, { uvArgs: ['-v'], sub: 'watch' })
+  ok('the launcher builds the command line from the descriptor', built.ok === true, String(built.detail))
+  const line = (built.args ?? []).join(' ')
+  ok('and the module name comes from the descriptor rather than from the call site',
+    line.includes(`${d.descriptor.runtime.module}@${bare.embedVersion}`), line)
+  ok('and the subcommand and profile are expanded', /daemon --profile coding-agent watch$/.test(line), line)
+
+  // A version that cannot be determined is refused, not guessed. This is the failure a descriptor
+  // makes possible -- get the source of the version wrong and every command refuses to build.
+  const noVersion = svc.serviceArgs(d.descriptor, { profile: 'coding-agent', withPackages: [] }, {})
+  ok('a context with no known version is refused rather than guessed',
+    noVersion.ok === false && /version is known/.test(noVersion.detail), String(noVersion.detail))
+
+  // The data layer says how to ask a real question, and a descriptor cannot opt out of that.
+  ok('the data probe names a statement rather than just a port',
+    svc.dataProbe(d.descriptor)?.kind === 'sql' && /select/i.test(svc.dataProbe(d.descriptor).statement),
+    JSON.stringify(svc.dataProbe(d.descriptor)))
+  ok('and the data kind is postgres, which is what decides which probe module runs',
+    svc.dataKind(d.descriptor) === 'postgres', String(svc.dataKind(d.descriptor)))
+
+  // The health model is declared, not implied: both questions, separately.
+  ok('readiness and liveness are separate entries in the descriptor',
+    d.descriptor.health.ready.path === '/health' && d.descriptor.health.live.path === '/health/live',
+    JSON.stringify(d.descriptor.health.ready) + ' / ' + JSON.stringify(d.descriptor.health.live))
 }
 
 // ── two switches whose names promised more than they did ─

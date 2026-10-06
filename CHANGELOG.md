@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+
+- **A service descriptor: what this tool supervises is now a value rather than a set of literals.**
+  Every path in `resolveContext` was built from a literal `~/.hindsight`, the daemon's module name was
+  written into four separate `uvx --with` argument lists, and "is it healthy" meant `GET /health`
+  because that is what this particular service answers. None of it was wrong -- it was unexamined, and
+  that made "what this tool supervises" a fact about the source code instead of something readable,
+  disagreeable and replaceable.
+  - Seven faces were measured, not assumed: the home directory, the plugin settings file
+    (`coding-agent.json`, a constant rather than `<profile>.json`), the profile files, **the runtime
+    module name in four separate argument lists**, the database instance name, the health endpoints,
+    and the data protocol. All seven are fields of one descriptor now.
+  - The descriptor answers five things: how to run it, where its state lives, how to ask whether it is
+    alive, how to ask whether it is *ready* (a different question, and the reason `probeDaemon` splits
+    liveness from readiness), and what data it depends on.
+  - **A descriptor may not weaken a probe into a weaker claim.** `kind: 'sql'` names a statement, not a
+    port. A descriptor that could only say "something is listening" would be a way of declaring weaker
+    evidence as acceptable, and the database probe asks a real question precisely because `LISTEN` plus
+    a data directory plus a failing handshake is a state that exists.
+  - **Nor may it opt out of the honesty rules.** `unknown != zero`, "refuse rather than silently fall
+    back" and "a record must not claim what did not happen" hold for every descriptor.
+  - Equivalence is asserted as a comparison, not as a snapshot: the context the descriptor produces is
+    checked field by field against the values the literals produced, recomputed from `homedir()` rather
+    than pasted, so the check does not decay into a record of one machine's home directory. An unknown
+    service id is refused rather than defaulted to the one that exists -- running the wrong service's
+    commands is worse than running none.
+  - **Not claimed:** one descriptor exists, so the design is not yet tested by a second. That is the
+    next test of it, not a conclusion of it.
+
 ### Changed
 
 - **Two switches whose names promised more than they did.** Each was found by reading output, which is

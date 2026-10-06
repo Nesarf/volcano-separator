@@ -289,6 +289,47 @@ Three protections were added because system-level reach is what makes them neces
    that can call DPAPI too. What it does stop is the cheap versions: a journal copied from
    elsewhere, a hand-written one, a backup swapped for another, a plausible-looking edit.
 
+---
+
+## 11. What is being supervised is a value (2026-10-06)
+
+Every path in `resolveContext` used to be built from a literal `~/.hindsight`, the daemon’s module
+name was spelled out in four separate `uvx --with` argument lists, and “is it healthy” meant `GET /health`
+because that is what this particular service answers. None of it was wrong. It was unexamined, which
+made “what this tool supervises” a fact about the source code rather than something a person could
+read, disagree with, or replace.
+
+The seven faces of that coupling, measured rather than assumed:
+
+| Face | Was |
+| --- | --- |
+| home directory | `~/.hindsight`, a literal |
+| plugin settings file | `coding-agent.json`, a constant — note it is not `<profile>.json` |
+| profile files | `profiles/<profile>.{env,log,lock}` |
+| **runtime module** | **`hindsight-embed@<version>`, written into four argument lists** |
+| database instance | `hindsight-embed-<profile>` under the user’s `~/.pg0` |
+| health semantics | `/health` is readiness, `/health/live` is liveness |
+| data store | the PostgreSQL wire protocol |
+
+All seven are now fields of one descriptor in `lib/service.mjs`: how to run it, where its state lives,
+how to ask whether it is alive, how to ask whether it is *ready*, and what data it depends on. The
+precedent is `pgMode` and `deployment`, which were made explicit as two orthogonal questions instead
+of one guess; this is that, one level up.
+
+**What a descriptor may not do.**
+
+* **It may not weaken a probe into a weaker claim.** `kind: 'sql'` names a statement, not a port. A
+  descriptor that could only say “something is listening” would be a way of declaring weaker evidence
+  as acceptable, and the database probe insists on asking a real question precisely because
+  `LISTEN` plus a data directory plus a failing handshake is a state that exists.
+* **It may not opt out of the honesty rules.** `unknown != zero`, “refuse rather than silently fall
+  back”, and “a record must not claim what did not happen” hold for every descriptor.
+
+**What is not claimed.** One descriptor exists, so the design is not yet tested by a second. The
+equivalence is: the context it produces matches, field for field, what the literals produced —
+asserted as a comparison rather than as a snapshot. A second descriptor is what will show whether the
+fields are enough, and that is the next test of this design rather than a conclusion of it.
+
 ## 10. What to build first
 
 This section used to say "**Stage 0, and nothing else**". Stage 0 and Stage 1 have since been built, so
