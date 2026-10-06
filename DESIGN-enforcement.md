@@ -325,10 +325,36 @@ of one guess; this is that, one level up.
 * **It may not opt out of the honesty rules.** `unknown != zero`, “refuse rather than silently fall
   back”, and “a record must not claim what did not happen” hold for every descriptor.
 
-**What is not claimed.** One descriptor exists, so the design is not yet tested by a second. The
-equivalence is: the context it produces matches, field for field, what the literals produced —
-asserted as a comparison rather than as a snapshot. A second descriptor is what will show whether the
-fields are enough, and that is the next test of this design rather than a conclusion of it.
+**What is not claimed.** ~~One descriptor exists, so the design is not yet tested by a second.~~ It was
+tested by a second on 2026-10-06 — see below. The equivalence for the first is: the context it produces
+matches, field for field, what the literals produced — asserted as a comparison rather than as a
+snapshot.
+
+### The second descriptor (2026-10-06)
+
+A descriptor invented to fit the fields proves the fields are self-consistent and nothing else, so the
+second one describes a service that is really running on this machine and is shaped differently: the
+**DSH host**. Four things it broke, all found by trying to describe it rather than by reasoning about
+it:
+
+| Face | Was assumed | Actually |
+| --- | --- | --- |
+| liveness | an endpoint answering 2xx | the host answers **401** to its guarded endpoints and **404** to everything else. `reachable` became a declared kind, because reading 401 as unhealthy would report a working host as down |
+| readiness | always present | this service **publishes none**. `kind: 'none'` with a reason, rather than pointing at a 404 and calling the 404 a failure |
+| runtime | uvx | a plain `node <entry> web`. Its entry point is recorded **nowhere this tool reads**, so the descriptor declares `launchable: false` and refuses instead of guessing a path that would resolve on one machine and not the next |
+| config file | JSON | its settings are YAML, and `readJsonLoose` **throws** on malformed content rather than returning null — which its name invites a caller to assume. The unguarded call crashed on the second descriptor and on nothing before it |
+
+**What did not break is the finding that matters.** The layout templates, the profile naming, the log
+declaration, the process-identification block and the environment override for the home directory all
+carried over unchanged. Seven faces were collected, and four needed no new shape.
+
+**What it exposed, honestly: the descriptor is the easy half.** `heal`, `warm` and `serve` are
+*Hindsight's sequence* — warm through uvx, then serve, then watch on a heartbeat. Nothing about a
+descriptor makes them general: each assumes a service started by one runtime, with one readiness
+endpoint and one data store. The descriptor made the *description* general; the *operations* are still
+one service's. The CLI must therefore refuse them for another service rather than run Hindsight's
+sequence against it, and making them general is the next piece of work rather than a footnote to this
+one.
 
 ## 10. What to build first
 

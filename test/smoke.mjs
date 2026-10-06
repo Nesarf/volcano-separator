@@ -2359,6 +2359,74 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('and the data kind is postgres, which is what decides which probe module runs',
     svc.dataKind(d.descriptor) === 'postgres', String(svc.dataKind(d.descriptor)))
 
+  // ── the second descriptor: what the design was missing ─
+  // A descriptor invented to fit the fields proves the fields are self-consistent and nothing else.
+  // This one describes a service that is really running on this machine and is shaped differently:
+  // the DSH host, which answers HTTP to everything, has no health endpoint, and is started by a plain
+  // node interpreter rather than by uvx.
+  {
+    const dsh = svc.SERVICE_DESCRIPTORS.dsh
+    ok('a second descriptor exists and is a different kind of thing',
+      Boolean(dsh) && dsh.id !== 'hindsight' && dsh.runtime.kind === 'node', JSON.stringify(dsh?.runtime?.kind))
+
+    // Its home comes from an environment variable, which is what the layout resolver only looked for
+    // at the top level -- true only while there was one descriptor.
+    const savedHome = process.env.DSH_HOME
+    process.env.DSH_HOME = join(tmpdir(), 'vsep-dshhome-' + process.pid)
+    const dp = svc.resolveServicePaths(dsh, { profile: 'web' })
+    ok('a descriptor whose home comes from the environment resolves to that environment',
+      dp.serviceHome === process.env.DSH_HOME, `${dp.serviceHome} vs ${process.env.DSH_HOME}`)
+    if (savedHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedHome
+
+    // No data layer is an absence, not an empty one. A caller that expects a directory here has to
+    // see the absence rather than a path to nothing.
+    ok('a service with no data layer reports null rather than an empty path',
+      dp.dataDir === null, String(dp.dataDir))
+    ok('and its data probe is absent rather than a stub',
+      svc.dataProbe(dsh) === null && svc.dataKind(dsh) === null,
+      JSON.stringify({ probe: svc.dataProbe(dsh), kind: svc.dataKind(dsh) }))
+
+    // Reachability, which is the vocabulary this descriptor forced into existence: the host answers
+    // 401 to its guarded endpoints and 404 to everything else, so "2xx means up" would call a working
+    // host down.
+    const live = svc.healthKind(dsh, 'live')
+    ok('the live probe is declared as reachability rather than as a status code',
+      live.kind === 'http-any' && live.okWhen === 'any-http-answer', JSON.stringify(live))
+    const ready = svc.healthKind(dsh, 'ready')
+    ok('and a service that publishes no readiness endpoint says so instead of being pointed at a 404',
+      ready.kind === 'none' && typeof ready.why === 'string' && ready.why.length > 0, JSON.stringify(ready))
+    ok('the health vocabulary keeps the strict kind for a service that really answers 2xx',
+      svc.healthKind(svc.HINDSIGHT, 'ready').kind === 'http-json',
+      JSON.stringify(svc.healthKind(svc.HINDSIGHT, 'ready')))
+
+    // It cannot be launched, and that is a declared fact rather than a failure. The entry point is
+    // decided by the install location and is recorded nowhere this tool reads; a guessed path would
+    // resolve on one machine and not the next.
+    const refused = svc.serviceArgs(dsh, { ...bare, profile: 'web' }, {})
+    ok('a descriptor that cannot launch its service says so rather than guessing a path',
+      refused.ok === false && refused.refused === true && /cannot start/.test(refused.detail),
+      String(refused.detail))
+    ok('and supplying an entry point does not override the descriptor\'s own answer',
+      svc.serviceArgs(dsh, { ...bare, profile: 'web', serviceEntry: 'X:/made-up.js' }, {}).ok === false,
+      'the descriptor was overridden by a caller-supplied path')
+
+    // Through the context, so the refusal is reachable from the CLI and not only from the module.
+    const dshCtx = g.resolveContext({ service: 'dsh' })
+    ok('the context can be resolved for the second service',
+      dshCtx.serviceId === 'dsh' && dshCtx.runtimeModule === 'dsh', `${dshCtx.serviceId} / ${dshCtx.runtimeModule}`)
+    ok('and the first service is unchanged by the second one existing',
+      bare.serviceId === 'hindsight' && bare.runtimeModule === 'hindsight-embed',
+      `${bare.serviceId} / ${bare.runtimeModule}`)
+
+    // A settings file that is not JSON must not crash the resolver. DSH's is YAML, and readJsonLoose
+    // throws on malformed content rather than returning null, which its name invites a caller to
+    // assume -- so the unguarded call crashed on the second descriptor and on nothing before it.
+    ok('a non-JSON settings file is tolerated rather than fatal',
+      dshCtx.pluginCfg && typeof dshCtx.pluginCfg === 'object',
+      JSON.stringify(dshCtx.pluginCfg))
+  }
+
   // The health model is declared, not implied: both questions, separately.
   ok('readiness and liveness are separate entries in the descriptor',
     d.descriptor.health.ready.path === '/health' && d.descriptor.health.live.path === '/health/live',

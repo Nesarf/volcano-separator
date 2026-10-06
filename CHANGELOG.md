@@ -4,6 +4,29 @@
 
 ### Added
 
+- **A second service descriptor, and it is a real service rather than one invented to fit.** A
+  descriptor written to match the fields proves the fields are self-consistent and nothing else, so
+  the second describes the **DSH host**, which is running on this machine and is shaped differently.
+  Four things it broke, all found by trying to describe it:
+  - **liveness:** the host answers **401** to its guarded endpoints and **404** to everything else, so
+    "2xx means up" would report a working host as down. `reachable` is now a declared kind.
+  - **readiness:** this service publishes none. `kind: 'none'` with a reason, rather than pointing at
+    a 404 and calling the 404 a failure.
+  - **runtime:** a plain `node <entry> web`, not uvx -- and its entry point is recorded nowhere this
+    tool reads, so the descriptor declares `launchable: false` and refuses instead of guessing a path
+    that would resolve on one machine and not the next.
+  - **config file format:** its settings are YAML, and `readJsonLoose` **throws** on malformed content
+    rather than returning null, which its name invites a caller to assume. The unguarded call crashed
+    on the second descriptor and on nothing before it.
+  - **What did not break is the finding that matters:** the layout templates, profile naming, log
+    declaration, process-identification block and the home-directory environment override all carried
+    over unchanged. Seven faces were collected and four needed no new shape.
+  - **What it also exposed:** the descriptor is the easy half. `heal` / `warm` / `serve` are
+    Hindsight's sequence and nothing about a descriptor makes them general. That they are still one
+    service's is the next piece of work, stated in the design rather than left as a footnote.
+
+### Changed
+
 - **A service descriptor: what this tool supervises is now a value rather than a set of literals.**
   Every path in `resolveContext` was built from a literal `~/.hindsight`, the daemon's module name was
   written into four separate `uvx --with` argument lists, and "is it healthy" meant `GET /health`
