@@ -167,6 +167,27 @@
 
 ### Security
 
+- **The never-list could be walked around with a junction.** Every refusal compared the path as
+  *written*, using `GetFullPath`, which is lexical: it normalises `..` and slashes and resolves
+  nothing else. On a machine with junctions that is not the question *where does this file live*.
+  - Demonstrated before the fix, on this machine:
+    ```
+    mklink /J E:\scratch\innocent-link C:\Windows\System32
+    GetFullPath E:\scratch\innocent-link\kernel32.dll -> not under C:\Windows -> NOT refused
+    ```
+    and `icacls` would then have applied the deny to the real System32 file. A junction needs no
+    elevation, this machine already has several, and this is the one rule that was supposed to hold
+    even when the caller insists.
+  - `bin/resolve-path.ps1` asks the filesystem instead, via `GetFinalPathNameByHandle`, which is the
+    operation that actually resolves reparse points. PowerShell 5.1 has no `ResolveLinkTarget`, and
+    opening with no access rights means it works on a file the caller could not open to read.
+  - Every comparison is made **twice**: against the path as written and against the path the
+    filesystem says it really is. Either one hits the never-list and the action is refused.
+  - Verified end to end: a file behind a junction into System32 is now refused, a normal scratch file
+    still passes, and a direct System32 path is refused as before.
+
+### Fixed
+
 - **`release` now checks who it is releasing.** A pid is not an identity, and the ledger has known
   that since it was written -- `custodyReport` computes `pid-reused` and reports it -- but the release
   path never consulted it. So the tool could correctly show a recycled pid on one screen and resume

@@ -2132,6 +2132,82 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(dir, { recursive: true, force: true })
 }
 
+// ── a path is not an identity ─
+// The never-list refused to touch anything under %SystemRoot% by comparing the path as WRITTEN, using
+// GetFullPath, which is lexical: it normalises `..` and slashes and resolves nothing else. On a
+// machine with junctions that is not the question "where does this file live".
+//
+// Demonstrated before the fix, on this machine:
+//   mklink /J E:\scratch\innocent-link C:\Windows\System32
+//   GetFullPath E:\scratch\innocent-link\kernel32.dll -> not under C:\Windows -> NOT refused
+//   and icacls would have applied the deny to the real System32 file.
+//
+// A never-list that holds only when the caller spells the path the expected way is not a never-list.
+{
+  section('path identity')
+  const { spawnSync } = await import('node:child_process')
+  const base = join(tmpdir(), 'vsep-junc-' + process.pid)
+  const link = join(base, 'innocent-link')
+  rmSync(base, { recursive: true, force: true })
+  mkdirSync(join(base, 'real'), { recursive: true })
+  writeFileSync(join(base, 'real', 'y.exe'), 'x')
+
+  if (process.platform !== 'win32') {
+    ok('path identity is Windows-only (skipped honestly)', true, '')
+  } else {
+    // A junction needs no elevation, which is the point: this is not an exotic case.
+    // New-Item rather than mklink. mklink is a cmd builtin, so it must arrive as one command string,
+    // and cmd's quote handling then eats the paths: argv-style it silently does nothing, and the
+    // single-string form fails with a syntax error. PowerShell takes the two paths as parameters.
+    spawnSync('powershell.exe', ['-NoProfile', '-Command',
+      "New-Item -ItemType Junction -Path '" + link + "' -Target 'C:\\Windows\\System32' | Out-Null",
+    ], { encoding: 'utf8', timeout: 60000 })
+    const viaLink = join(link, 'kernel32.dll')
+    const made = existsSync(viaLink)
+
+    ok('a junction could be created without elevation', made, 'mklink failed; the rest cannot be tested')
+    if (made) {
+      const resolver = join(projectDir, 'bin', 'resolve-path.ps1')
+      const run = (p) => spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolver, '-Path', p], { encoding: 'utf8', timeout: 60000 }).stdout.trim()
+
+      // String.raw, because a plain literal here loses the backslashes to the JS escaping and the
+      // resolver is then handed `C:WindowsSystem32kernel32.dll` -- which is what the first version of
+      // this test did, and it reported the resolver broken rather than the test.
+      const direct = JSON.parse(run(String.raw`C:\Windows\System32\kernel32.dll`))
+      ok('the resolver leaves a real path alone', direct.ok === true && direct.different === false, JSON.stringify(direct))
+
+      const through = JSON.parse(run(viaLink))
+      ok('and resolves a junction to what it actually points at',
+        through.ok === true && /System32/i.test(String(through.resolved)), JSON.stringify(through))
+      ok('and says the two spellings disagree, which is the fact a caller needs',
+        through.different === true, JSON.stringify(through))
+
+      // The end to end answer: the tool must now refuse the path it used to accept.
+      const cli = join(projectDir, 'bin', 'cli.mjs')
+      const r = spawnSync(process.execPath, [cli, '--json', 'isolate', viaLink], {
+        encoding: 'utf8',
+        timeout: 120000,
+      })
+      // `emit` pretty-prints, so the object spans many lines. Taking the last line beginning with `{`
+      // -- as the first version did -- yields a fragment that cannot parse, and the check then fails
+      // against a tool that behaved correctly. Parse from the first brace to the last.
+      const out = r.stdout ?? ''
+      let parsed = null
+      try {
+        parsed = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1))
+      } catch { /* the run may have produced no json at all */ }
+      ok('the junction path is refused rather than acted on',
+        parsed?.refused === true, JSON.stringify(parsed ?? out.slice(-200)))
+      ok('and the refusal names %SystemRoot% rather than something generic',
+        /SystemRoot/i.test(String(parsed?.detail ?? '')), String(parsed?.detail))
+
+      spawnSync('cmd', ['/c', 'rmdir', link], { encoding: 'utf8' })
+    }
+  }
+
+  rmSync(base, { recursive: true, force: true })
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

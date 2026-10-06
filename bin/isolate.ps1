@@ -147,22 +147,49 @@ function Get-Refusal {
     try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return 'the path cannot be resolved' }
     $low = $full.ToLowerInvariant()
 
+    # Every compare below is done twice: once against the path as written and once against the path
+    # the filesystem says it really is.
+    #
+    # GetFullPath is lexical -- it normalises `..` and slashes and resolves nothing else -- so on a
+    # machine with junctions it does not answer "where does this file live". Demonstrated here:
+    #
+    #   mklink /J E:\scratch\innocent-link C:\Windows\System32
+    #   GetFullPath E:\scratch\innocent-link\kernel32.dll
+    #     -> E:\scratch\innocent-link\kernel32.dll, which is not under C:\Windows, so NOT refused,
+    #     -> and icacls would then have applied the deny to the real System32 file.
+    #
+    # Junctions need no elevation to create and this machine already has several, so this is not an
+    # exotic case. A never-list that holds only when the caller spells the path the expected way is
+    # not a never-list.
+    $real = $null
+    try {
+        $rr = & (Join-Path $PSScriptRoot 'resolve-path.ps1') -Path $full | ConvertFrom-Json
+        if ($rr.ok) { $real = [string]$rr.resolved }
+    } catch { }
+    $targets = @($low)
+    $realLow = $null
+    if ($real) {
+        $realLow = ([System.IO.Path]::GetFullPath($real)).ToLowerInvariant()
+        if ($realLow -ne $low) { $targets += $realLow }
+    }
+    $under = { param($prefix) $p2 = ([System.IO.Path]::GetFullPath($prefix)).ToLowerInvariant(); foreach ($t in $targets) { if ($t.StartsWith($p2)) { return $true } }; return $false }
+
     $win = $env:SystemRoot
-    if ($win -and $low.StartsWith($win.ToLowerInvariant())) {
+    if ($win -and (& $under $win)) {
         if (-not $IncludeSystemRoot) {
             return "it is inside %SystemRoot% ($win); pass -IncludeSystemRoot to mean it"
         }
     }
     $installer = Join-Path $env:ProgramData 'Package Cache'
-    if ($installer -and $low.StartsWith($installer.ToLowerInvariant())) { return 'it is inside the installer package cache' }
+    if ($installer -and (& $under $installer)) { return 'it is inside the installer package cache' }
 
     # Nothing may act on the undo path itself. A mechanism that can disable its own reversal is not
     # reversible, and this is the one rule that has to hold even when the caller insists.
-    if ($JournalDir -and $low.StartsWith(([System.IO.Path]::GetFullPath($JournalDir)).ToLowerInvariant())) {
+    if ($JournalDir -and (& $under $JournalDir)) {
         return 'it is the undo journal itself'
     }
     $self = [System.IO.Path]::GetFullPath($PSScriptRoot)
-    if ($low.StartsWith($self.ToLowerInvariant())) { return 'it is this tool' }
+    if (& $under $self) { return 'it is this tool' }
 
     return $null
 }
