@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added
+
+- **`vault` / `unvault` / `vaulted` -- the first operation that can take a file out of its place.**
+  `vault <path>` copies a file into a store on the file's own volume; `--move` is what removes the
+  original, and it has to be typed. `unvault <id>` puts it back. `vaulted` lists every store on the
+  machine.
+  - **The default is a copy, and the original does not move.** Copy keeps every failure recoverable:
+    the thing you are worried about is still exactly where it was, so a bug costs disk space and an
+    apology rather than a toolchain and an afternoon. `--move` is the operation that can cost the
+    afternoon, so it is the one that must be asked for by name.
+  - **One store per volume** (`<volume>\.volcano-separatorault\`), not one central store. A
+    central store makes every vaulting a cross-volume copy: write elsewhere, verify, then delete the
+    original -- a window in which both copies exist or neither does, which is exactly the shape of
+    "if this goes wrong, someone loses their file". On the same volume, a move is a rename.
+  - **The undo does not depend on this tool.** Every result prints the plain `copy` command that puts
+    the file back, and the test performs that copy with the filesystem directly and compares hashes,
+    rather than checking that a string looks right.
+  - **The manifest is signed, and a signed manifest names one file.** Otherwise "restore" is a
+    primitive that copies any file to any path on command -- the same privilege-escalation shape the
+    ACL journal had, and answered the same way: HMAC-SHA256 over a canonical string, keyed by 32
+    random bytes that DPAPI binds to this machine. Verified to fail: disabling the comparison makes
+    two tests fail, one of them reporting that a forged path was acted on.
+  - **Restores refuse rather than overwrite.** Where the original path now holds different bytes the
+    restore stops and says so, because what is there may be the user's newer work. `--force` means it.
+  - Room is checked before the copy, not after. One volume on this machine had 16 GB free, and a
+    truncated copy that is then trusted as the only surviving version is the worst outcome here.
+  - `isolated` and `encrypted` were added to the command-surface check, which had never covered them
+    despite both being read-only and runnable with no arguments -- the omission that file exists to
+    catch.
+
 ### Fixed
 
 - **A command line containing a bare LF made the whole record unparseable.** The recorder escapes

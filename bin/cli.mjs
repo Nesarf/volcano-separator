@@ -26,6 +26,7 @@ import * as res from '../lib/resources.mjs'
 import * as uvc from '../lib/uvcache.mjs'
 import * as enf from '../lib/enforce.mjs'
 import * as cry from '../lib/crypt.mjs'
+import * as vau from '../lib/vault.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -115,6 +116,15 @@ Commands:
                      replacing them. Rewrites the bytes, so any signature it carried no longer holds.
   decrypt <journal>  restore the original bytes, refusing if they do not match the recorded sha256
   encrypted          what this tool has encrypted, with the state read from the bytes
+  vault <path> [--move] [--dry-run] [--reason "..."]
+                     take a copy of a file into the vault for its own volume. The default is a COPY:
+                     the original does not move, and --move is what removes it, because that is the
+                     operation that can cost someone their afternoon. Every entry prints the plain
+                     copy command that puts it back, which works even if this tool is gone.
+  unvault <id> [--force] [--dry-run]
+                     put a vault entry back, refusing if the manifest fails verification or if the
+                     original path now holds different content
+  vaulted            what is in the vault, per volume (the listing for the vault command)
   evidence           what a mode other than observe would have done, per day, accumulated
   release <pid>                                   resume a detained process
   detained [--no-probe] [--no-scan]               what is under custody now, checked against the
@@ -660,6 +670,66 @@ async function main() {
       for (const e of l.entries) {
         console.log(`  ${String(e.state ?? '?').padEnd(13)} ${e.path}`)
         console.log(C.dim(`                ${e.journal}`))
+      }
+      break
+    }
+
+    case 'vault': {
+      const target = opts._[1] ?? ''
+      if (!target) { console.error('volcano-separator: vault needs a path'); process.exit(2) }
+      const r = await vau.vault(ctx, {
+        path: target,
+        move: Boolean(opts.move),
+        dryRun: Boolean(opts.dryRun),
+        reason: opts.reason ?? '',
+      })
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red(r.refused ? 'refused' : 'FAIL') + ': ' + r.detail); process.exit(1) }
+      console.log(`${C.green('ok')} ${r.moved ? 'moved into' : 'copied into'} the vault: ${r.id}`)
+      console.log(`  ${r.bytes} byte(s)`)
+      console.log(C.dim(`  vault copy: ${r.vaultPath}`))
+      // Printed on every success, not on request. An undo nobody can find is not an undo, and this
+      // one is a plain copy that does not need this tool to exist.
+      console.log('')
+      console.log('  to put it back without this tool:')
+      console.log(`    ${r.undo}`)
+      // Only when a manifest was actually written. A dry run writes nothing, so it has no signature
+      // to be missing -- and a warning about the absence of a file that was never created is a false
+      // signal of exactly the kind this tool removes.
+      if (!r.signed && !r.dryRun) console.log(C.yellow('  (the manifest carries no signature, so this tool cannot vouch for it)'))
+      process.exit(0)
+    }
+
+    case 'unvault': {
+      const id = opts._[1] ?? ''
+      if (!id) { console.error('volcano-separator: unvault needs an entry id (see: vaulted)'); process.exit(2) }
+      const r = await vau.restoreVault(ctx, { id, force: Boolean(opts.force), dryRun: Boolean(opts.dryRun) })
+      if (opts.json) return emit(r)
+      if (!r.ok) {
+        console.log(C.red(r.refused ? 'refused' : 'FAIL') + ': ' + r.detail)
+        if (r.note) console.log(C.dim('  ' + r.note))
+        if (r.undo) { console.log(''); console.log('  the command that would put it back:'); console.log(`    ${r.undo}`) }
+        process.exit(1)
+      }
+      console.log(`${C.green('ok')} ${r.detail}`)
+      break
+    }
+
+    case 'vaulted': {
+      // Imported here rather than at the top, which is what this file already does for the few fs
+      // calls it makes outside the library layer.
+      const { existsSync } = await import('node:fs')
+      const l = vau.vaultEntries(ctx, ctx.logDir ?? process.env.USERPROFILE ?? '.', { all: true })
+      if (opts.json) return emit(l)
+      console.log(`vault: ${l.root}`)
+      if (!l.rows.length) { console.log(C.dim('  (empty)')); break }
+      for (const e of l.rows) {
+        if (e.problem) { console.log(`  ${C.yellow('unreadable')}  ${e.id}: ${e.problem}`); continue }
+        const there = existsSync(e.originalPath)
+        console.log(`  ${String(e.id)}`)
+        console.log(`    ${C.dim('original')}  ${e.originalPath}${there ? '' : C.dim('  (not there now)')}`)
+        console.log(`    ${C.dim('vault')}     ${e.vaultPath}`)
+        console.log(`    ${C.dim('bytes')}     ${e.size}${e.signed ? '' : C.yellow('  unsigned')}${e.moved ? C.dim('  (moved, not copied)') : ''}`)
       }
       break
     }

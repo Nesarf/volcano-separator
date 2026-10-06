@@ -45,6 +45,12 @@ const COMMANDS = [
   ['decide', { args: ['decide', '30'], want: [0] }],
   ['policy show', { args: ['policy', 'show'], want: [0] }],
   ['detained', { args: ['detained'], want: [0] }],
+  // The three "what has this tool done" listings. `isolated` and `encrypted` were never in this list
+  // even though they are read-only and run fine with no arguments -- which is the omission this file
+  // exists to catch. `vaulted` covers every store on the machine, so it is safe by construction.
+  ['isolated', { args: ['isolated'], want: [0] }],
+  ['encrypted', { args: ['encrypted'], want: [0] }],
+  ['vaulted', { args: ['vaulted'], want: [0] }],
   ['timeline', { args: ['timeline'], want: [0] }],
   ['service', { args: ['service'], want: [0] }],
   ['cache', { args: ['cache'], want: [0] }],
