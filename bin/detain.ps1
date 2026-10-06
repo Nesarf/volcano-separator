@@ -36,7 +36,7 @@ function Write-Activity {
     param([hashtable]$Fields)
     $Fields['t'] = (Get-Date).ToString('o')
     $line = ($Fields.GetEnumerator() | ForEach-Object {
-        $v = if ($null -eq $_.Value) { '' } else { ([string]$_.Value) -replace '\\', '\\' -replace '"', '\"' -replace "`r?`n", ' ' }
+        $v = if ($null -eq $_.Value) { '' } else { ([string]$_.Value) -replace '\\', '\\' -replace '"', '\"' -replace "[\r\n]", ' ' }
         '"{0}":{1}' -f $_.Key, $(if ($_.Value -is [int] -or $_.Value -is [long]) { $_.Value } else { '"' + $v + '"' })
     }) -join ','
     # The recorder and this script both append to the same file. A collision is expected, not

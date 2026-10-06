@@ -183,7 +183,7 @@ function Write-Event {
              ForEach-Object {
                  $v = $_.Value
                  if ($null -eq $v) { $v = '' }
-                 $v = ([string]$v) -replace '\\', '\\' -replace '"', '\"' -replace "`r?`n", ' '
+                 $v = ([string]$v) -replace '\\', '\\' -replace '"', '\"' -replace "[\r\n]", ' '
                  '"{0}":{1}' -f $_.Key, $(if ($_.Value -is [int] -or $_.Value -is [long]) { $_.Value } else { '"' + $v + '"' })
              }) -join ','
     $file = Join-Path $LogDir (('activity-' + (Get-Date).ToString('yyyy-MM-dd')) + '.ndjson')

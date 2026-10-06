@@ -2213,6 +2213,63 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // failure, so a guard that lets one exception stop it being written makes the recorder silent about
   // its own state while still recording events -- which is exactly what happened in production before
   // the reads were wrapped.
+  // A raw newline inside a command line used to make the record unreadable.
+  //
+  // The recorder sanitises every value before writing a line, and the pattern it used matched CR+LF
+  // or a bare CR -- but NOT a bare LF, which is what a multi-line bash command carries. The raw
+  // newline landed inside a JSON string, so the whole record failed to parse:
+  //
+  //   measured over eight days of the live record: 410 unparseable lines out of 403,685 (0.10%),
+  //   each one a proc-start whose cmd spanned multiple lines.
+  //
+  // The record loses them silently. readActivity counts FILE read failures, not LINES it could not
+  // parse, so nothing reports the loss -- and fewer findings reads as good news, which is the
+  // failure this whole layer exists to prevent.
+  //
+  // This asserts the property rather than the spelling: the expression is lifted out of the script,
+  // applied to real line-break characters, and the result must survive a JSON round trip. Verified
+  // to fail on the previous pattern before being kept.
+  {
+    const m = /-replace\s+"\[([^\]]*)\]",\s*' '/.exec(src)
+    ok('the recorder sanitises line breaks with a character class',
+      m !== null, 'no -replace "[...]", \' \' found in the recorder script')
+
+    if (m) {
+      const cls = m[1]
+      ok('and the class covers both CR and LF, because a bare LF is what a shell command carries',
+        cls.includes('r') && cls.includes('n'), `class was [${cls}]`)
+
+      // A bare LF is the shape that was missed; the others are here so a narrowed pattern cannot
+      // pass by fixing only this one.
+      const shapes = ['bare LF', 'bare CR', 'CRLF', 'double LF', 'LF then CR', 'quote and LF']
+      const NL = String.fromCharCode(10)
+      const CR = String.fromCharCode(13)
+      const broken = []
+      for (const name of shapes) {
+        const raw = name === 'bare LF' ? `a${NL}b`
+          : name === 'bare CR' ? `a${CR}b`
+          : name === 'CRLF' ? `a${CR}${NL}b`
+          : name === 'double LF' ? `a${NL}${NL}b`
+          : name === 'LF then CR' ? `a${NL}${CR}b`
+          : `a"${NL}b`
+        // The same escaping the recorder performs, in the same order: backslash, then quote, then
+        // every line-break character. The quote is not decoration -- a fixture that leaves one
+        // unescaped fails the round trip for a reason that has nothing to do with newlines, and the
+        // first version of this check failed for exactly that reason.
+        const escaped = raw
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/[\r\n]/g, ' ')
+        const line = `{"cmd":"${escaped}"}`
+        let ok2 = true
+        try { JSON.parse(line) } catch { ok2 = false }
+        if (!ok2) broken.push(name)
+      }
+      ok('and a sanitised command line always parses as one JSON record',
+        broken.length === 0, `these shapes still break the record: ${broken.join(', ')}`)
+    }
+  }
+
   ok('the health snapshot is written even if reading the subscription state throws',
     /try \{ \$sub = \[bool\]\(Get-EventSubscriber/.test(src),
     'Get-EventSubscriber is not guarded, so a throw there leaves the snapshot unwritten')

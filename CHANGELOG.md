@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A command line containing a bare LF made the whole record unparseable.** The recorder escapes
+  every value before writing a line, and its pattern was CR-question-LF -- which matches CR+LF or a
+  bare CR, and **misses a bare LF**, exactly what a multi-line bash command carries. The raw newline
+  landed inside a JSON string and the record failed to parse.
+  - Measured over eight days of the live record: **410 unparseable lines out of 403,685 (0.102%)**,
+    every one a `proc-start` whose `cmd` spanned multiple lines. All sit mid-file, not at a tail:
+    they are not partial writes.
+  - **Nothing reported the loss.** `readActivity` counts *file* read failures, not *lines* it could
+    not parse. Fewer findings reads as good news, which is the failure this layer exists to prevent.
+  - Fixed in `activity-watch.ps1` and `detain.ps1`, which carried the same expression. Asserted
+    against every line-break shape (bare LF, bare CR, CRLF, doubled, reversed, and one combined with
+    a quote) with a JSON round trip per shape, and **the assertion was verified to fail on the old
+    pattern before being kept**.
+  - The 410 damaged records were left in place. All fields survive and only `cmd` is truncated, so
+    they are recoverable -- but rewriting them is an operation on evidence and should be a decision,
+    not a convenience script.
+
 ### Added
 
 - **[`TODO.md`](TODO.md)** -- agreed work that is not done, with what is measured and what would count

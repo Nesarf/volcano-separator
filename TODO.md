@@ -96,29 +96,40 @@ can read, disagree with, and replace.
 
 ---
 
-## `neverQuarantine` must stop constraining the engineering, and the tool must gain real enforcement
+## The tool must gain real enforcement capability (nothing forbids it; the wiring is missing)
 
 **Added:** 2026-10-06 · **Status:** not started · **Scope:** the decision and action layers
 
-### First, a measurement that changes what this entry means
+### Framing: this is not a permission problem
 
-**`neverQuarantine` is not constraining anything, because nothing reads it.**
+The distinction matters, because the two are fixed in completely different places.
 
-`POLICY_DEFAULTS.neverQuarantine` is a comment plus a field that `loadPolicy` spreads into its result
-and no code ever consults. `grep -rn neverQuarantine lib/ bin/` returns exactly one hit: the
-definition. `policyAllows` reads only the `allow` array. It is not surfaced in `policy show`. It
-cannot be set, and it cannot be wrong.
+**Nothing in this codebase forbids acting.** There is no gate that returns before an action, no
+refusal path keyed on a mode, no policy value consulted before doing something. Grepping for a
+prohibition finds one thing, and it is not a prohibition: `POLICY_DEFAULTS.neverQuarantine`, a comment
+plus a field that `loadPolicy` spreads into its result and **no code ever consults**. One hit, the
+definition. `policyAllows` reads only the `allow` array. It is not in `policy show`. It cannot be set,
+and it cannot be wrong.
 
-So the intention behind this entry is right and the target needs naming more precisely: **the thing
-that limits what this tool can do is not `neverQuarantine` the policy field — it is the behavioural
-rule stated in the README** ("it does not move, rename, rewrite or delete the target"), implemented
-in the commands rather than enforced by a switch. `detain` suspends. `isolate` re-writes an ACL.
-`crypt` rewrites the bytes and renames. **There is no quarantine to forbid, because there is no
-quarantine to call.**
+So the target of this entry is not "stop forbidding" -- it is **"finish the wiring"**. The four gaps
+are all the same shape: the thing exists, the wire is missing.
 
-That is worth fixing on its own terms: a policy field whose name suggests a live switch, sitting
-next to fields that *are* live, is a false signal of exactly the kind this project exists to remove.
-Either it becomes a real switch, or it goes.
+| | State |
+| --- | --- |
+| `policy.mode`'s `suspend` / `reject` | **declared, zero implementation** |
+| `wouldAct` / `actionable` | **computed, read by nobody** |
+| `encrypt` / `decrypt` | **written, zero callers** |
+| `isolate` / `detain` | **work, but only when a human types the command** -- no rule engine can invoke them |
+
+The last row is the one that matters most, and it is easy to miss: **even the capabilities that work
+have no automatic caller.** The MCP surface deliberately does not expose them, and says why --
+"isolating and restoring are deliberately NOT exposed here, because an agent should not be able to
+change what can execute on this machine". So a capability being built is not the same as a capability
+being reachable from a decision.
+
+`neverQuarantine` still deserves a disposition, on its own terms: a field whose name suggests a live
+switch, sitting next to fields that *are* live, is a false signal of the kind this project exists to
+remove. Either it becomes a real switch, or it goes.
 
 ### What actually blocks enforcement (measured)
 
@@ -199,3 +210,105 @@ a small change, not a reason to keep deferring it.
   undo demonstrated end to end, including with this tool deleted.
 - `neverQuarantine` is gone as a false switch, replaced by the explicit per-operation scoping that
   `crypt.mjs` already had to adopt.
+
+---
+
+## One detector rule has never had any input, and the gate's sample is measured at 3
+
+**Added:** 2026-10-06, **answered in the same pass** · **Scope:** small · **Outcome:** see below
+
+### What the ledger could not tell apart, and what the answer is
+
+`evidence.ndjson` held 2 rows both reading `actionable: 0`, and that emptiness had two possible
+causes the ledger cannot separate: a quiet machine, or a blind detector. This project has produced a
+counter that could only ever read zero twice before, and both looked exactly like a quiet machine.
+
+**The rules are not blind.** Their firing is already asserted in the test suite (a crafted record
+that trips all three at once, an ordinary system process producing nothing, and the chain on to
+`ask`). What had never been done is replaying the **real** record through the real detector. Done:
+
+```
+3 days of the live activity record, read-only:
+  findings            16
+  by rule             exec-from-ephemeral 11, binary-vanished 5
+  decisions           16  ->  allow 13, ask 3
+  actionable          3
+```
+
+So the detector works on real traffic, and the first gate row ("`ask` fired at least N times on real
+traffic") has a measured answer: **N is currently 3.**
+
+### The finding that matters: one rule has no input at all
+
+`persist-from-ephemeral` returned 0, and the reason is not that the machine is clean. Counted by kind
+over the same record, 128,096 lines:
+
+```
+proc-start   63,548     proc-stop  63,548     isolate  848
+watcher          14     baseline       14     detain   112
+custody-alert     5     persist         0   <- the rule's only input
+```
+
+**The recorder has never recorded a single persistence change.** `persist-from-ephemeral` fires on
+`kind === 'persist'` records, and there are none -- so that rule cannot fire in production, no matter
+how long the evidence is collected. It is not a detector problem; it is an input problem, one layer
+below, and the two look identical from the ledger.
+
+This is exactly the failure mode this project keeps finding, in a new place: **a rule whose input
+never arrives reports the same zero as a rule that looked and found nothing.** Waiting a month for
+data would have produced a month of zeros for this rule and no explanation.
+
+### The second thing the same count exposes: **410 unreadable records, and a real bug behind them**
+
+Counted properly -- parsing every line, not just the one day's 128k-line file:
+
+```
+8 files, 403,685 records, 410 unparseable (0.102%)
+```
+
+**Not partial tails.** Every one sits mid-file, and every one is a `proc-start` whose `cmd` spans
+multiple lines. The cause is in the recorder's own escaping:
+
+```powershell
+-replace "`r?`n", ' '     # matches CR+LF, or a bare CR -- and MISSES a bare LF
+```
+
+A command line carrying a bare LF -- which is what a multi-line bash command produces -- escaped the
+pattern untouched, so a raw newline landed inside a JSON string and the whole record failed to parse.
+Fixed in `activity-watch.ps1` and `detain.ps1` (both had the same expression), now asserted against
+every line-break shape with a JSON round trip, and **the assertion was verified to fail on the old
+pattern before being kept**.
+
+Two things worth stating plainly:
+
+- **The record loses these silently.** `readActivity` counts *file* read failures, not *lines* it
+  could not parse, so 410 records vanish with nothing reporting it. Since the run-through above
+  shows 16 findings over the same record, **0.1% of unreadable records is 0.1% of findings**, and
+  fewer findings reads as good news.
+- **Every damaged record is recoverable and none was recovered.** All fields survive -- `kind`, `t`,
+  `pid`, `name`, `user` -- and only the `cmd` string is truncated at the newline. The repair is to
+  re-escape the raw control character inside the string and parse again; it has not been run, and
+  should be a deliberate decision rather than a convenience, because rewriting the record is itself
+  an operation on evidence.
+
+The same class of mistake has now appeared four times in this project, always in the layer that
+translates between shells: `readJsonLoose` and the BOM, `exeFromCmd`'s regex literal blinding the
+import lint, the audit scanner repeating that bug, and now an escape pattern that misses one
+character. It is recorded here because the pattern is the finding, not the individual bug.
+
+### What finished looks like
+
+- **Decide what `persist-from-ephemeral` is for.** Either the recorder's persistence comparison is
+  broken and should be fixed (the surfaces are enumerated every 30 passes and compared -- the
+  mechanism exists and has simply never produced a difference), or Run keys and Startup folders
+  genuinely do not change on this machine and the rule is noise that should be deleted rather than
+  carried. Both are legitimate answers; carrying a rule that structurally cannot fire is not.
+- **Report unreadable lines.** `readActivity` counts *file* read failures already; a line that
+  parses as neither JSON nor a partial write should reach the same surface, because "fewer findings"
+  reads as good news and that is the failure this whole layer exists to prevent. This one is now
+  urgent rather than tidy: the recorder produced 410 of them, and nothing anywhere said so.
+- **Decide what to do with the 410 damaged records.** They are recoverable (only `cmd` is truncated
+  at the newline) and they were left untouched deliberately -- rewriting them is an operation on the
+  evidence, and it should be a decision rather than a cleanup script someone runs while passing.
+- **Record the outcome in `DESIGN-enforcement.md`** beside the gate table, which currently states the
+  gate's first row as a requirement rather than as a measured number. It is now measured: 3.
