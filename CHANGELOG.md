@@ -4,6 +4,31 @@
 
 ### Added
 
+- **`chamber <pid> [--window]` -- everything observable about one process, live and historical.**
+  The live half is read now (threads, handles, working set, CPU, start time, path, its windows
+  **including hidden ones**, connections, modules). The historical half comes from the activity record,
+  which outlives the process.
+  - **The window is this tool's, and the target cannot close it or hide from it.** It does not inject,
+    so a process that never created a window has nothing to reveal and cannot be given one -- the panel
+    says so rather than leaving the reader to wonder why the list is empty. Everything reported about
+    such a process is still true of it, which is where the honest capability lives.
+  - `--window` opens a read-only view. **Nothing is suspended, moved or altered**, and the panel prints
+    the exact `release` command. Entry is by command only; there is no rule that can open it.
+  - **A pid number and a process are not the same thing, and the panel now says so.** The record is
+    full of events from earlier processes that held the same number: on the first real run, "63 events
+    for this pid" resolved to **one** that belonged to the process being watched and **62** to a
+    predecessor. The split is possible because the live half knows when this process started. The
+    predecessors are kept and labelled rather than dropped -- "this number was used before" is a real
+    fact, and a different one from "this process did that".
+  - The window refreshes in two tiers, because the facts differ by three orders of magnitude in cost:
+    `Get-NetTCPConnection` **1277 ms** against `Get-Process` **71 ms**. Measured end to end: fast
+    **686 ms**, slow **2116 ms**. A window meant to be watched cannot spend its refresh budget on the
+    one call that costs more than the refresh interval.
+  - It stays open after the process exits, because its history is still worth reading, and closes only
+    when a person closes it.
+
+### Changed
+
 - **The chamber probe, tiered, and the first honest measurement of what it can see.** A window meant to
   be watched cannot spend its refresh budget on the one call that costs more than the refresh
   interval, so the parts are separated by cost rather than kept on one timer:

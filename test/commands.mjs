@@ -51,6 +51,8 @@ const COMMANDS = [
   ['isolated', { args: ['isolated'], want: [0] }],
   ['encrypted', { args: ['encrypted'], want: [0] }],
   ['vaulted', { args: ['vaulted'], want: [0] }],
+  ['chamber (bad pid)', { args: ['chamber', 'not-a-pid'], want: [2] }],
+  ['chamber (gone pid)', { args: ['chamber', '999999'], want: [0] }],
   ['timeline', { args: ['timeline'], want: [0] }],
   ['service', { args: ['service'], want: [0] }],
   ['cache', { args: ['cache'], want: [0] }],

@@ -2292,6 +2292,63 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
 }
 
+// ── the chamber profile: one process, and the two histories that are not the same ─
+{
+  section('the chamber profile')
+  const ch = await import('../lib/chamber.mjs')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  const prof = await ch.processProfile(ctx, process.pid, { historyDays: 3 })
+  ok('a profile is produced for a live process', prof.ok === true, String(prof.liveDetail))
+  ok('and it carries both halves',
+    prof.live !== null && prof.history !== null, JSON.stringify({ live: Boolean(prof.live), history: Boolean(prof.history) }))
+  ok('and the live half knows when this process started, which is what makes the split possible',
+    typeof prof.live?.startedAt === 'string' && prof.history.identityKnown === true,
+    JSON.stringify({ startedAt: prof.live?.startedAt, identityKnown: prof.history.identityKnown }))
+
+  // Every event attributed to this process must be at or after its start. This is the assertion that
+  // would fail if the filter were dropped -- and without it the panel shows another process's
+  // activity as this one's.
+  {
+    const start = Date.parse(prof.live.startedAt)
+    const wrong = prof.history.events.filter((e) => Date.parse(String(e.t ?? '')) < start)
+    ok('no event attributed to this process predates it', wrong.length === 0,
+      `${wrong.length} event(s) before the start time`)
+
+    // The predecessors are kept, not dropped: "this pid number was used before" is a real fact and a
+    // different one from "this process did that".
+    const earlier = prof.history.earlierHolders ?? []
+    const misfiled = earlier.filter((e) => Date.parse(String(e.t ?? '')) >= start)
+    ok('and nothing in the earlier-holder list belongs to this process', misfiled.length === 0,
+      `${misfiled.length} misfiled`)
+    ok('the two lists do not overlap and account for everything dated',
+      prof.history.eventCount + earlier.length + (prof.history.undatedCount ?? 0) >= prof.history.eventCount,
+      JSON.stringify({ mine: prof.history.eventCount, earlier: earlier.length, undated: prof.history.undatedCount }))
+  }
+
+  // A pid that is gone still has a history, and the profile must not pretend otherwise. This is the
+  // half that survives the process, and it is the reason the window stays useful after an exit.
+  {
+    const gone = await ch.processProfile(ctx, 999999, { historyDays: 1 })
+    ok('a pid that does not exist still produces a profile rather than an error',
+      gone.ok === true && gone.live?.exists === false, JSON.stringify({ ok: gone.ok, exists: gone.live?.exists }))
+    ok('and its start time is unknown rather than assumed, so no event is claimed for it',
+      gone.history.identityKnown === false && gone.history.eventCount === 0,
+      JSON.stringify({ known: gone.history.identityKnown, events: gone.history.eventCount }))
+  }
+
+  // The module must state the boundary it works inside, because it is the one a reader will ask to
+  // "extract" what a process will not show.
+  {
+    const src = readFileSync(join(projectDir, 'lib', 'chamber.mjs'), 'utf8')
+    ok('the module states that the window is ours and not the target\'s',
+      /belongs to this tool|window is ours|tool owns/i.test(src), 'the ownership is not stated')
+    ok('and that a process without a window has nothing to reveal',
+      /has nothing to reveal/.test(src), 'the limit is not stated')
+  }
+}
+
 // ── which PowerShell runs the platform layer, decided in one place ─
 // The name was written into nineteen call sites across six modules. That is not a decision, it is
 // nineteen assumptions that agree -- and the fork only became visible when a second interpreter

@@ -27,6 +27,7 @@ import * as uvc from '../lib/uvcache.mjs'
 import * as enf from '../lib/enforce.mjs'
 import * as cry from '../lib/crypt.mjs'
 import * as vau from '../lib/vault.mjs'
+import * as chm from '../lib/chamber.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -125,6 +126,12 @@ Commands:
                      put a vault entry back, refusing if the manifest fails verification or if the
                      original path now holds different content
   vaulted            what is in the vault, per volume (the listing for the vault command)
+  chamber <pid> [--window] [--days N]
+                     everything observable about one process: live facts (threads, handles, memory,
+                     CPU, its windows INCLUDING hidden ones, connections, modules) plus its history
+                     from the activity record, which outlives it. --window opens a read-only view
+                     this tool owns. It does not inject, so a process with no window has nothing to
+                     reveal -- and everything it reports is still true about it.
   evidence           what a mode other than observe would have done, per day, accumulated
   release <pid>                                   resume a detained process
   detained [--no-probe] [--no-scan]               what is under custody now, checked against the
@@ -683,6 +690,68 @@ async function main() {
         console.log(C.dim(`                ${e.journal}`))
       }
       break
+    }
+
+    case 'chamber': {
+      const pid = Number(opts._[1] ?? 0)
+      if (!Number.isFinite(pid) || pid <= 0) { console.error('volcano-separator: chamber needs a pid (see: ps)'); process.exit(2) }
+      const days = Number(opts.days ?? 3)
+      const profile = await chm.processProfile(ctx, pid, { historyDays: Number.isFinite(days) ? days : 3 })
+      if (opts.json) return emit(profile)
+      if (!profile.ok) { console.log(C.red('FAIL') + ': ' + profile.liveDetail); process.exit(1) }
+
+      const L = profile.live ?? {}
+      console.log(`chamber -- pid ${pid}${L.name ? ' (' + L.name + ')' : ''}`)
+      console.log('')
+      if (!L.exists) console.log(C.yellow('  the process is gone; only its history remains'))
+      console.log(C.dim('  --- live, read now ---'))
+      for (const [k, v] of [['threads', L.threads], ['handles', L.handles],
+        ['working set', L.workingSetMB === undefined || L.workingSetMB === null ? null : L.workingSetMB + ' MB'],
+        ['cpu', L.cpuSeconds === undefined || L.cpuSeconds === null ? null : L.cpuSeconds + ' s'],
+        ['started', L.startedAt], ['path', L.path]]) {
+        if (v !== null && v !== undefined) console.log(`    ${String(k).padEnd(14)} ${v}`)
+      }
+      // A window is a fact, and it decides what this view is worth. Saying "no window" is not a
+      // failure report -- most daemons have none, and everything else here is still true of them.
+      const win = L.windows
+      if (Array.isArray(win)) {
+        const hidden = win.filter((w) => !w.visible).length
+        console.log(`    ${'windows'.padEnd(14)} ${win.length} owned, ${win.length - hidden} visible, ${hidden} hidden`)
+        for (const w of win.slice(0, 6)) console.log(C.dim(`      [${w.visible ? 'visible' : 'HIDDEN '}] ${w.class}  '${String(w.title).slice(0, 60)}'`))
+      } else if (L.hasWindow === false) {
+        console.log(C.dim(`    ${'windows'.padEnd(14)} none -- this process has no window to reveal, and this tool`))
+        console.log(C.dim('    ' + ' '.repeat(14) + 'does not inject, so it cannot be given one'))
+      }
+      if (Array.isArray(L.connections)) {
+        console.log(`    ${'connections'.padEnd(14)} ${L.connections.length}`)
+        for (const c of L.connections.slice(0, 6)) console.log(C.dim(`      ${c.state} ${c.local} -> ${c.remote}`))
+      } else if (L.connectionsError) {
+        // Not "none". A failed query and an empty one are different answers.
+        console.log(C.yellow(`    ${'connections'.padEnd(14)} could not be read -- this is NOT "none"`))
+      }
+      if (Array.isArray(L.modules)) console.log(`    ${'modules'.padEnd(14)} ${L.modules.length}`)
+
+      const h = profile.history
+      console.log('')
+      console.log(C.dim(`  --- history, from the record (${h.days} day(s)) ---`))
+      // Two counts, because "this process" and "this pid number" are different questions and only
+      // one of them is about a process. A pid number is reused; the record has no idea that happened.
+      console.log(`    ${'events'.padEnd(14)} ${h.eventCount}${h.identityKnown === false ? " (this process does not report a start time, so every event for the number is shown)" : ''}`)
+      if (h.earlierHolderCount) {
+        console.log(C.dim(`    ${'earlier'.padEnd(14)} ${h.earlierHolderCount} event(s) for this pid number before this process started -- a different process held it`))
+      }
+      console.log(`    ${'custody'.padEnd(14)} ${h.everDetained ? h.lifecycles.length + ' time(s)' : 'never detained by this tool'}`)
+      for (const e of h.events.slice(-10)) {
+        const when = String(e.t ?? '').replace('T', ' ').slice(0, 19)
+        console.log(C.dim(`      ${when}  ${String(e.kind ?? '').padEnd(10)} ${String(e.cmd ?? e.title ?? e.name ?? e.action ?? '').slice(0, 70)}`))
+      }
+
+      if (opts.window) {
+        const r = await chm.openChamber(ctx, { pid, days })
+        console.log('')
+        console.log(r.ok ? C.green('  window opened') + C.dim(' -- ' + r.detail) : C.red('  ' + r.detail))
+      }
+      process.exit(0)
     }
 
     case 'vault': {
