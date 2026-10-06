@@ -380,3 +380,69 @@ Two things a new Stage 1 operation must carry, both of which the existing two ha
 2. **A boundary statement scoped to what it actually does.** `isolate` does not rewrite bytes;
    `encrypt` does. They cannot share a sentence, and a new operation that moves a file cannot share
    either of theirs.
+
+---
+
+## 12. The chamber: a window this tool owns (2026-10-06)
+
+The capability asked for: when a process will not show what it is doing, put it somewhere that shows it
+anyway, and keep it there. Written down before it is built, because half of this capability is a
+statement about what it cannot do.
+
+### 12.1 The boundary that decides everything here
+
+**This tool does not inject into the target.** That is stated in `detain.ps1` and it is the invariant
+the rest of the design rests on. One consequence follows directly, and it is worth stating flatly:
+
+> A process that never created a window **cannot be made to produce one**. There is nothing to reveal.
+> "Extracting visualisation" from such a process yields nothing, and a version that claimed to would be
+> the same class of false signal this project exists to remove.
+
+So the honest form of this capability is not *force it to show*, it is **put it in a place where it is
+observed**. The window is ours. The process cannot close it, cannot hide from it, and does not have to
+cooperate with it.
+
+### 12.2 What the window carries, and where each half comes from
+
+| Half | Source | Exists today |
+| --- | --- | --- |
+| **Live facts** -- threads, handles, working set, CPU, own windows including hidden ones, TCP connections, loaded modules | read at observation time, per tick | yes: the custody window already refreshes these every second |
+| **History** -- every event this pid produced, the chain it was started from, what was already done to it | the append-only activity record | yes: `custodyTimeline` rebuilds one pid's whole custody history from it |
+| **The uncooperative case** -- a process with no window at all | the live half plus the history | yes, and it is the normal case: most daemons have no window |
+| **Its own continued state while held** | the suspension, and the fact that release is not in the process's hands | yes |
+
+**The uncooperative case is where the honest claim lives.** For a windowless process the tool can
+still say, continuously and verifiably: what it is, who started it, what it has open, what it is
+connected to, how much it has spent, and every event it ever emitted. That is a great deal more than
+"nothing", and it is everything that is true.
+
+### 12.3 What the chamber is *not*
+
+* **Not a sandbox.** Freezing a process does not confine it to a jail: it holds its handles, its
+  mappings and its sockets the entire time, and on release it resumes exactly where it stopped. A job
+  object can confine a process that has not already joined one, and attaching a *running* process is
+  restricted -- so "containment" here means **suspended and watched**, not **restricted**.
+* **Not a filter driver.** It cannot prevent an action. It notices, shows and holds.
+* **Not a place a process can be left by a rule.** Default off, and entered by a person.
+
+### 12.4 The door, and why the metaphor is exact
+
+The process cannot leave by itself, and the key is not in its hands -- it is in the operator's. That is
+what `detain` already is: the tool prints the release command on every result, and the ACL and vault
+paths both keep their undo independent of this tool being alive. **A room with one door and the key
+outside is a legitimate design; a room the tool itself cannot open is not.** So the chamber carries the
+same requirement as everything else here: the way out is documented, printed, and works without this
+tool running.
+
+### 12.5 Default off, and why
+
+The mechanism is a persistent suspension of a running program, presented prominently. Two of the three
+failure modes it can cause are quiet:
+
+| Failure | What it does | Why it is quiet |
+| --- | --- | --- |
+| held too long | resources stay held; a shared file, port or lock stays held | nothing complains until something else needs it |
+| released wrongly | a process resumes into a state it did not expect | it looks like the process's own bug |
+| never released | the operator forgets | the alert exists for exactly this, and it took a version of this tool to learn that a freeze nobody comes back for is worse than one never applied |
+
+So it is opt-in, like the enforcement stages, and for the same reason.

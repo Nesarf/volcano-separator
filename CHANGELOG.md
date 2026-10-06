@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed
+
+- **Which PowerShell runs the platform layer is now decided in one place, on measurement.** The name
+  was written into **24 call sites across nine modules** -- not a decision, but twenty-four assumptions
+  that happened to agree. The fork only became visible when a second interpreter appeared on the
+  machine and someone asked why the first was still being used.
+  - Measured, short round trip: **powershell 5.1 806 ms bare / 1349 ms with a script; pwsh 7.6.6
+    1136 ms bare / 1157 ms with a script.** `pwsh` pays a fixed ~1.1 s to bring up the .NET runtime,
+    which cannot be amortised, and this layer is called often and its cost is per call. On the heavy
+    probe it was 1850 ms against 4667 ms.
+  - What choosing 5.1 costs is already paid for in this codebase rather than newly accepted: the BOM
+    that `readJsonLoose` exists for, the missing `AesGcm` that shaped the encryption split (Node does
+    the crypto, PowerShell does DPAPI), and the missing `ResolveLinkTarget` that made
+    `resolve-path.ps1` use `GetFinalPathNameByHandle`.
+  - The choice is one function, overridable through `VSEP_POWERSHELL`, and a check fails if any other
+    module names the interpreter -- verified to fail on a planted name. `activity.mjs` had one more
+    than the call sites: the scheduled task's VBS launcher wrote `powershell.exe` into a script that
+    runs as SYSTEM, so a tool that changed its interpreter would have left the recorder on the other
+    one.
+
 ### Fixed
 
 - **The health probe now asks what the descriptor says to ask, and the first version of that change

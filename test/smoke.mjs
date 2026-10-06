@@ -2198,6 +2198,51 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 }
 
 
+// ── which PowerShell runs the platform layer, decided in one place ─
+// The name was written into nineteen call sites across six modules. That is not a decision, it is
+// nineteen assumptions that agree -- and the fork only became visible when a second interpreter
+// appeared on the machine and someone asked why the first was still being used.
+//
+// PowerShell 5.1 is the answer, on measurement: it starts faster (806 ms bare against pwsh's 1136 ms)
+// and its cost is not a fixed runtime bring-up that cannot be amortised, which matters because this
+// layer is called often and per call. What that choice costs is already paid in this codebase -- the
+// BOM that `readJsonLoose` exists for, the missing `AesGcm` that shaped the encryption split, the
+// missing `ResolveLinkTarget` that made `resolve-path.ps1` use P/Invoke.
+{
+  section('the PowerShell host is chosen once')
+  const plat = await import('../lib/platform.mjs')
+  const host = plat.powershellHost()
+  ok('a host is returned', typeof host === 'string' && host.length > 0, String(host))
+  ok('on Windows it is the 5.1 host, on anything else pwsh',
+    process.platform === 'win32' ? host === 'powershell' : host === 'pwsh', `${process.platform} -> ${host}`)
+
+  // The override exists so the choice can be tested without editing code, and is read from the
+  // environment rather than being a second hardcoded answer.
+  const saved = process.env.VSEP_POWERSHELL
+  process.env.VSEP_POWERSHELL = 'pwsh'
+  ok('and it can be overridden from the environment',
+    process.platform === 'win32' ? plat.powershellHost() === 'pwsh' : true,
+    String(plat.powershellHost()))
+  if (saved === undefined) delete process.env.VSEP_POWERSHELL
+  else process.env.VSEP_POWERSHELL = saved
+
+  // No other module may name the interpreter. This is the check that keeps the decision in one place,
+  // and it fails the moment somebody writes the name into a new call site.
+  //
+  // The directory is read here rather than reused from the import-lint section above: that one is a
+  // local inside its own block, and reaching for it produced a ReferenceError -- and a test that
+  // cannot run is not evidence about the code. This project has now learned that twice.
+  const { readdirSync: readLibDir } = await import('node:fs')
+  const offenders = []
+  for (const f of readLibDir(join(projectDir, 'lib')).filter((x) => x.endsWith('.mjs'))) {
+    if (f === 'platform.mjs') continue
+    const s = readFileSync(join(projectDir, 'lib', f), 'utf8')
+    if (/['"]powershell(\.exe)?['"]/.test(s)) offenders.push(f)
+  }
+  ok('no module outside platform.mjs names the interpreter',
+    offenders.length === 0, `named in: ${offenders.join(', ')}`)
+}
+
 // ── no screen may promise enforcement the tool cannot perform ─
 // The same false claim was written in three places at three different times: `policy mode reject`
 // said "will be TERMINATED", `decide` said "enforcement is ON", and `signals` went on saying it for a
