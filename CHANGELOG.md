@@ -26,6 +26,19 @@
     something, so a filtering action silently swallowed the events it meant to keep (observed as
     `seen=0` while rows were still being written), and CPU did not improve because the loop was
     driven at the same rate either way. The verifiable filter in the loop is the one that stayed.
+- **The test suite wrote into the activity record it exists to protect.** Three test contexts performed
+  real work -- freezing and resuming a process, applying and restoring an ACL, encrypting a file --
+  while resolving the *default* log directory, so a test run left `detain`, `isolate` and `crypt` rows
+  in the machine's own record, including half-written last lines where a process was killed mid-write.
+  Measured after the fix: the count of scratch-path rows in the live record no longer changes when the
+  suite runs.
+  - The deeper cause was found while fixing it: **`detain.ps1` never declared `-ActivityDir`,** so its
+    explicit directory was rejected and the summary always went to `%TEMP%olcano-separatorctivity`
+    -- which is the same path the Node side derives *only when `logDir` is unset*. With any log
+    directory override the summary was written to one place and looked for in another, and a freeze
+    that had worked perfectly read as "detain produced no summary". `isolate.ps1` already declared it.
+- **A last line with no readable timestamp printed "Infinity min old".** That is not a measurement, it
+  is a number-shaped absence. The usual cause is a writer killed mid-line, which the message now says.
 - **Everything periodic only ran when something had happened.** The window sampler, the persistence
   comparison and the pruning all sat below the event handling, so on a quiet machine they did not run
   at all: the check that catches a Run key added and removed between two passes was the *last* thing

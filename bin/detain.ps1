@@ -23,6 +23,7 @@ param(
     [switch]$NoSuspend,
     [switch]$NoCustody,
     [switch]$KeepOnTop,
+    [string]$ActivityDir = '',
     [string]$PolicyFile = '',
     [string]$Reason = ''
 )

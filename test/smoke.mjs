@@ -1576,7 +1576,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('isolation')
   const enf = await import('../lib/enforce.mjs')
   const g = await import('../lib/core.mjs')
-  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-acl-' + process.pid) }
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-acl-' + process.pid), logDir: join(tmpdir(), 'vsep-acl-log-' + process.pid) }
   const scratch = join(tmpdir(), 'vsep-iso-' + process.pid)
   mkdirSync(scratch, { recursive: true })
   const target = join(scratch, 'thing.exe')
@@ -1651,7 +1651,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('journal authenticity')
   const enf = await import('../lib/enforce.mjs')
   const g = await import('../lib/core.mjs')
-  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-journal-' + process.pid) }
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-journal-' + process.pid), logDir: join(tmpdir(), 'vsep-journal-log-' + process.pid) }
   const scratch = join(tmpdir(), 'vsep-ja-' + process.pid)
   mkdirSync(scratch, { recursive: true })
 
@@ -1839,7 +1839,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('isolation live state')
   const enf = await import('../lib/enforce.mjs')
   const g = await import('../lib/core.mjs')
-  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-live-' + process.pid) }
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-live-' + process.pid), logDir: join(tmpdir(), 'vsep-live-log-' + process.pid) }
   const scratch = join(tmpdir(), 'vsep-lv-' + process.pid)
   mkdirSync(scratch, { recursive: true })
 
@@ -1891,6 +1891,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     ...g.resolveContext({}),
     cryptJournalDir: join(base, 'crypt'),
     cryptKeyFile: join(base, 'crypt.key'),
+    logDir: join(base, 'log'),
   }
   const target = join(base, 'secret.bin')
   const original = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 37) % 256))
@@ -1958,7 +1959,14 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 {
   section('release identity')
   const g = await import('../lib/core.mjs')
-  const ctx = g.resolveContext({})
+  // A scratch log directory, because these tests really do freeze and resume a process. With the
+  // resolved default they wrote their events into the machine's own activity record -- so a test run
+  // left "released pid ..." rows in the evidence this tool exists to keep honest, and a half-written
+  // last line in that record made the recorder look stale. A test that pollutes the artifact it is
+  // meant to protect fails in the direction nobody checks.
+  const scratch = join(tmpdir(), 'vsep-release-' + process.pid)
+  rmSync(scratch, { recursive: true, force: true })
+  const ctx = { ...g.resolveContext({}), logDir: scratch }
 
   if (process.platform !== 'win32') {
     ok('release identity is Windows-only (skipped honestly)', true, '')
@@ -1990,6 +1998,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     ok('the record names the action that actually happened', freed.action === 'released', String(freed.action))
     try { kid.kill() } catch { /* it may already be gone */ }
   }
+  rmSync(scratch, { recursive: true, force: true })
 }
 
 // ── a policy that cannot be read is not the default policy ─
@@ -2383,9 +2392,17 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
       // The end to end answer: the tool must now refuse the path it used to accept.
       const cli = join(projectDir, 'bin', 'cli.mjs')
+      // TEMP is redirected for the child, because that is where an isolate records what it refused:
+      // Node derives its activity directory from tmpdir() and isolate.ps1 from $env:TEMP, so one
+      // override covers both sides. Without it a test run leaves its own ACL refusals in the
+      // machine's activity record -- which is the artifact this tool exists to keep honest, and the
+      // suite was writing to it every time it ran.
+      const scratchTmp = join(tmpdir(), 'vsep-junc-tmp-' + process.pid)
+      mkdirSync(scratchTmp, { recursive: true })
       const r = spawnSync(process.execPath, [cli, '--json', 'isolate', viaLink], {
         encoding: 'utf8',
         timeout: 120000,
+        env: { ...process.env, TEMP: scratchTmp, TMP: scratchTmp },
       })
       // `emit` pretty-prints, so the object spans many lines. Taking the last line beginning with `{`
       // -- as the first version did -- yields a fragment that cannot parse, and the check then fails

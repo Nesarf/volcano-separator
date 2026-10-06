@@ -121,6 +121,9 @@ $script:Counters = @{
     eventsSelf    = 0   # ...of which we discarded as our own process
     eventsDuplicate = 0 # ...of which reached the queue as a repeat rather than being dropped early
     eventsAccepted  = 0 # distinct events that reached the handler
+    batches       = 0 # wake-ups that carried something
+    eventsInBatch = 0 # events queued across those wake-ups
+    maxBatch      = 0 # the largest single wake-up, which is what a backlog looks like
     eventsWritten = 0   # rows that reached the log
     eventsDropped = 0   # rows we tried to write and could not
     handlerErrors = 0   # exceptions while handling an event, before any write was attempted
@@ -236,6 +239,9 @@ function Save-Health {
         eventsSelf     = $script:Counters.eventsSelf
         eventsDuplicate = $script:Counters.eventsDuplicate
         eventsAccepted = $script:Counters.eventsAccepted
+        batches        = $script:Counters.batches
+        eventsInBatch  = $script:Counters.eventsInBatch
+        maxBatch       = $script:Counters.maxBatch
         selfPid        = $script:SelfPid
         eventsWritten  = $script:Counters.eventsWritten
         eventsDropped  = $script:Counters.eventsDropped
@@ -414,6 +420,10 @@ while ($true) {
     $script:Counters.iterations++
     $ev = Wait-Event -Timeout 2
     if ($ev) {
+        $batch = @($ev).Count
+        $script:Counters.batches++
+        $script:Counters.eventsInBatch += $batch
+        if ($batch -gt $script:Counters.maxBatch) { $script:Counters.maxBatch = $batch }
         foreach ($e in $ev) {
             $script:Counters.eventsSeen++
             try {
@@ -498,5 +508,9 @@ while ($true) {
 
     if (((Get-Date) - $lastPrune).TotalMinutes -gt 30) { Prune-Old; $lastPrune = Get-Date }
 
-    Save-Health
+    # Forced periodically as well as throttled by time, because the throttle is measured in wall
+    # clock and a storm drives this loop fast enough that ten seconds of it is tens of thousands of
+    # passes -- during which the snapshot goes stale and the only thing that could report the storm
+    # reads as a recorder that is not running.
+    if ($script:Counters.passes % 5000 -eq 0) { Save-Health -Force } else { Save-Health }
 }
