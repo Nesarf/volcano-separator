@@ -37,6 +37,14 @@
     -- which is the same path the Node side derives *only when `logDir` is unset*. With any log
     directory override the summary was written to one place and looked for in another, and a freeze
     that had worked perfectly read as "detain produced no summary". `isolate.ps1` already declared it.
+- **The suite leaked two scratch directories per run, and had been for a while.** 248 of them had
+  accumulated in the temp tree the tool derives its own state from -- `vsep-both-*` (created and never
+  removed; the section deleted the other directory it had made and moved on) and `vsep-junc-tmp-*`
+  (the TEMP redirect added when the junction test stopped writing into the live record). Verified
+  stable afterwards: the count does not change across runs.
+  - Same lesson as the pollution fix, one level down: cleaning up "the paths you remember" is how a
+    suite fills a directory nobody is measuring. The three contexts that own three directories now
+    remove three.
 - **The reader forwarded only some of the counters the recorder publishes.** `eventsAccepted` was
   written by the recorder and dropped by `readRecorderHealth`, so `ps` printed `?` for it -- which
   reads as "this recorder does not publish that field" rather than "the reader lost it", and the

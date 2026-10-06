@@ -376,6 +376,7 @@ section('unrecorded custody')
      /forgotten custody/.test(both.detail) && /frozen with no record/.test(both.detail), both.detail)
 
   rmSync(dir, { recursive: true, force: true })
+  rmSync(dir2, { recursive: true, force: true })
 }
 
 section('cli detained --no-scan')
@@ -1637,6 +1638,10 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   rmSync(scratch, { recursive: true, force: true })
   rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+  // The log directory is the third thing this context owns. Leaving it behind is how 237 scratch
+  // directories accumulated in the temp directory the tool itself derives its state from -- a suite
+  // that leans on "the test cleans up" while adding one more thing to clean is how that happens.
+  rmSync(ctx.logDir, { recursive: true, force: true })
 }
 
 // ── a journal is only acted on if this tool wrote it ─
@@ -1701,6 +1706,10 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   rmSync(scratch, { recursive: true, force: true })
   rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+  // The log directory is the third thing this context owns. Leaving it behind is how 237 scratch
+  // directories accumulated in the temp directory the tool itself derives its state from -- a suite
+  // that leans on "the test cleans up" while adding one more thing to clean is how that happens.
+  rmSync(ctx.logDir, { recursive: true, force: true })
 }
 
 // ── stage 0: the trigger, with nothing attached to it ─
@@ -1875,6 +1884,10 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   rmSync(scratch, { recursive: true, force: true })
   rmSync(ctx.isolationJournalDir, { recursive: true, force: true })
+  // The log directory is the third thing this context owns. Leaving it behind is how 237 scratch
+  // directories accumulated in the temp directory the tool itself derives its state from -- a suite
+  // that leans on "the test cleans up" while adding one more thing to clean is how that happens.
+  rmSync(ctx.logDir, { recursive: true, force: true })
 }
 
 // ── in-place encryption: the order is the safety, not the cipher ─
@@ -2437,6 +2450,10 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
         /SystemRoot/i.test(String(parsed?.detail ?? '')), String(parsed?.detail))
 
       spawnSync('cmd', ['/c', 'rmdir', link], { encoding: 'utf8' })
+      // The TEMP redirect above is removed with the rest. A suite that leaks a directory per run
+      // fills the same temp tree the tool derives its own state from -- 239 of these were sitting
+      // there when it was noticed, every one from a test that cleaned up only what it remembered.
+      rmSync(scratchTmp, { recursive: true, force: true })
     }
   }
 
