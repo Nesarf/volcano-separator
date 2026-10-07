@@ -4,6 +4,26 @@
 
 ### Added
 
+- **Pixel glyphs, drawn rather than rendered.** The style this project requires cannot come from system
+  text rendering: PowerShell 5.1's WinForms text is antialiased, and this machine has **no pixel font
+  installed at all** (checked: zero matches among 425 families). So `bin/pixelfont.ps1` ships its own
+  **5x7 bitmap font** and paints it with `SetPixel` at an integer scale -- the only way to get real
+  pixel output out of GDI+, because every drawing primitive it offers will smooth and `SetPixel` cannot.
+  - Coverage is honest about its own limit: the characters a panel of numbers and Latin words needs,
+    plus an outlined box for anything else. An unknown character reads as a hole in the text rather
+    than as a letter that happens to look plausible -- the same rule the rest of this tool follows.
+  - Verified by rendering to a PNG and **reading the image back**, because that is the only check that
+    can catch a glyph that is drawn wrong rather than merely drawn.
+  - Two bugs, both of which needed that image to find, and one of which was invisible in the code:
+    `1 -shl (4 - $c)` is **not a shift in PowerShell** -- the right operand is composed by string
+    concatenation in that position, so every column tested the same two bits and every glyph came out
+    as vertical bars; and a stray `[int]$Cols = 0` left inside the function body is a **typed variable
+    declaration**, not a comment, so it silently overwrote the parameter and every bitmap came out one
+    column wide while the glyphs themselves drew perfectly. That second one is why the fault looked
+    like a font bug for two rounds.
+
+### Changed
+
 - **`chamber <pid> [--window]` -- everything observable about one process, live and historical.**
   The live half is read now (threads, handles, working set, CPU, start time, path, its windows
   **including hidden ones**, connections, modules). The historical half comes from the activity record,
