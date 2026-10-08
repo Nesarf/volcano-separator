@@ -126,7 +126,7 @@ Commands:
                      put a vault entry back, refusing if the manifest fails verification or if the
                      original path now holds different content
   vaulted            what is in the vault, per volume (the listing for the vault command)
-  chamber <pid> [--window] [--days N]
+  chamber <pid> [--window] [--pixel] [--days N]
                      everything observable about one process: live facts (threads, handles, memory,
                      CPU, its windows INCLUDING hidden ones, connections, modules) plus its history
                      from the activity record, which outlives it. --window opens a read-only view
@@ -747,7 +747,7 @@ async function main() {
       }
 
       if (opts.window) {
-        const r = await chm.openChamber(ctx, { pid, days })
+        const r = await chm.openChamber(ctx, { pid, days, pixel: Boolean(opts.pixel) })
         console.log('')
         console.log(r.ok ? C.green('  window opened') + C.dim(' -- ' + r.detail) : C.red('  ' + r.detail))
       }

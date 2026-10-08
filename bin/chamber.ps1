@@ -29,6 +29,13 @@ param(
     [int]$SlowMs = 15000,
     [switch]$TopMost,
     [switch]$Introspect,
+    # Pixel glyphs for the panel body instead of system-rendered text. Off by default:
+    # the readable view is the default and the pixel one is the deliberate choice.
+    [switch]$Pixel,
+    [ValidateRange(1, 6)][int]$PixelScale = 2,
+    # Write the pixel panel to a PNG and exit, without opening a window. A graphical claim needs a
+    # graphical check, and this project has no other way to look at a bitmap it produced.
+    [string]$PixelPng = '',
     [int]$AutoCloseMs = 0
 )
 
@@ -56,6 +63,18 @@ $INK     = [System.Drawing.Color]::FromArgb(214, 222, 236)
 $DIM     = [System.Drawing.Color]::FromArgb(120, 132, 158)
 $ACCENT  = [System.Drawing.Color]::FromArgb(126, 226, 176)
 $ALERT   = [System.Drawing.Color]::FromArgb(255, 138, 138)
+
+# The 5x7 glyphs. Loaded by dot-sourcing rather than duplicated: one font, one place to fix it.
+$pixelFont = $null
+if ($Pixel) {
+    $fontPath = Join-Path $PSScriptRoot 'pixelfont.ps1'
+    if (-not (Test-Path $fontPath)) {
+        Write-Error "the pixel font is missing: $fontPath"
+        exit 2
+    }
+    . $fontPath
+    $pixelFont = New-VsPixelFont
+}
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "VOLCANO SEPARATOR :: CHAMBER  --  pid $TargetPid"
@@ -86,8 +105,27 @@ $box.Dock = 'Fill'
 $box.BackColor = $PANEL
 $box.ForeColor = $INK
 $box.Font = New-Object System.Drawing.Font('Consolas', 9.5)
+$box.Visible = -not $Pixel
 $form.Controls.Add($box)
 $box.BringToFront()
+
+# The pixel panel.
+#
+# A second view of the same text, drawn from this project's own 5x7 glyphs instead of handed to
+# Windows. The difference is not cosmetic: `SetPixel` at an integer scale is the only way to get real
+# pixel output out of GDI+ -- every drawing primitive it offers smooths, and a TextBox will not give
+# pixel glyphs no matter how it is configured. Measured: this machine has no pixel font installed at
+# all, zero matches among 425 families.
+#
+# It is a mode rather than a replacement, and the default is the readable one. Pixel glyphs at scale 2
+# are legible but slow to paint, and `-Pixel` says so rather than pretending the choice is free.
+$pixelBox = New-Object System.Windows.Forms.PictureBox
+$pixelBox.Dock = 'Fill'
+$pixelBox.BackColor = $PANEL
+$pixelBox.SizeMode = 'AutoSize'
+$pixelBox.Visible = [bool]$Pixel
+$form.Controls.Add($pixelBox)
+$pixelBox.BringToFront()
 
 $foot = New-Object System.Windows.Forms.Label
 $foot.Dock = 'Bottom'; $foot.Height = 26
@@ -104,6 +142,7 @@ $script:slow = $null
 $script:profile = $null
 $script:lastSlow = [datetime]::MinValue
 $script:ticks = 0
+$script:lastPainted = $null
 $script:gone = $false
 
 $procinfo = Join-Path $PSScriptRoot 'procinfo.ps1'
@@ -128,7 +167,11 @@ function Bar {
     $n = [int][math]::Round(($Value / $Max) * $Width)
     if ($n -lt 0) { $n = 0 }
     if ($n -gt $Width) { $n = $Width }
-    return ([string]([char]0x2588) * $n) + ([string]([char]0x2591) * ($Width - $n))
+    # '#' and '.' rather than the block-drawing characters. The pixel font covers ASCII, so a bar
+    # built from U+2588 would render as a row of boxes -- a bar that says "unknown" instead of "how
+    # much". The system-text view loses a little polish for it and gains a glyph set the pixel view
+    # can actually draw.
+    return ('#' * $n) + ('.' * ($Width - $n))
 }
 
 function Render {
@@ -146,7 +189,7 @@ function Render {
         [void]$lines.Add('  What it did while it ran is in the history below, which survives it.')
     }
 
-    [void]$lines.Add('  ── LIVE  (this tick) ' + ('─' * 46))
+    [void]$lines.Add('  -- LIVE  (this tick) ' + ('-' * 46))
     [void]$lines.Add(("  {0,-14} {1}" -f 'name', [string]$fast.name))
     [void]$lines.Add(("  {0,-14} {1}" -f 'pid', [string]$fast.pid))
     if ($null -ne $fast.threads) { [void]$lines.Add(("  {0,-14} {1}" -f 'threads', [string]$fast.threads)) }
@@ -164,10 +207,10 @@ function Render {
     # Whether it has a window is a fact, and it is the fact that decides what this window is worth.
     $w = $fast.windows
     if ($null -eq $w) {
-        [void]$lines.Add('  ── WINDOWS  (part of the slow tier; not read on this tick)')
+        [void]$lines.Add('  -- WINDOWS  (part of the slow tier; not read on this tick)')
     } else {
         $vis = @($w | Where-Object { $_.visible })
-        [void]$lines.Add('  ── WINDOWS  ' + ("({0} owned, {1} visible, {2} hidden)" -f @($w).Count, $vis.Count, (@($w).Count - $vis.Count)))
+        [void]$lines.Add('  -- WINDOWS  ' + ("({0} owned, {1} visible, {2} hidden)" -f @($w).Count, $vis.Count, (@($w).Count - $vis.Count)))
         if (@($w).Count -eq 0) {
             [void]$lines.Add('     none. This process has no window to reveal, and this tool does not inject,')
             [void]$lines.Add('     so it cannot be given one. Everything above is still true about it.')
@@ -180,29 +223,29 @@ function Render {
     [void]$lines.Add('')
 
     if ($null -ne $fast.modules) {
-        [void]$lines.Add(("  ── MODULES ({0}) " -f @($fast.modules).Count) + ('─' * 40))
+        [void]$lines.Add(("  -- MODULES ({0}) " -f @($fast.modules).Count) + ('-' * 40))
         foreach ($m in (@($fast.modules) | Select-Object -First 8)) { [void]$lines.Add('     ' + [string]$m) }
         if (@($fast.modules).Count -gt 8) { [void]$lines.Add(("     ... and {0} more" -f (@($fast.modules).Count - 8))) }
     } else {
-        [void]$lines.Add('  ── MODULES  (slow tier; not read on this tick)')
+        [void]$lines.Add('  -- MODULES  (slow tier; not read on this tick)')
     }
     [void]$lines.Add('')
 
     if ($null -ne $fast.connections) {
-        [void]$lines.Add(("  ── CONNECTIONS ({0}) " -f @($fast.connections).Count) + ('─' * 36))
+        [void]$lines.Add(("  -- CONNECTIONS ({0}) " -f @($fast.connections).Count) + ('-' * 36))
         if (@($fast.connections).Count -eq 0) { [void]$lines.Add('     none') }
         foreach ($c in @($fast.connections)) { [void]$lines.Add(("     {0,-12} {1} -> {2}" -f [string]$c.state, [string]$c.local, [string]$c.remote)) }
     } elseif ($fast.connectionsError) {
         # A failed query is not an empty one, and the difference is the whole reason this branch exists.
-        [void]$lines.Add('  ── CONNECTIONS: could not be read, so this is NOT "none"')
+        [void]$lines.Add('  -- CONNECTIONS: could not be read, so this is NOT "none"')
         [void]$lines.Add('     ' + [string]$fast.connectionsError)
     } else {
-        [void]$lines.Add('  ── CONNECTIONS  (slow tier; not read on this tick)')
+        [void]$lines.Add('  -- CONNECTIONS  (slow tier; not read on this tick)')
     }
     [void]$lines.Add('')
 
-    # ── history: the half that survives the process ──
-    [void]$lines.Add('  ── HISTORY  (from the activity record, which outlives the process) ' + ('─' * 8))
+    # -- history: the half that survives the process --
+    [void]$lines.Add('  -- HISTORY  (from the activity record, which outlives the process) ' + ('-' * 8))
     if ($script:profile -and $script:profile.history) {
         $h = $script:profile.history
         [void]$lines.Add(("     {0} event(s) from THIS process over {1} day(s)" -f $h.eventCount, $h.days))
@@ -266,9 +309,23 @@ function Refresh {
     }
 
     if ($script:live -and -not $script:live.exists) { $script:gone = $true }
-    $box.Text = Render
+    $text = Render
+    $box.Text = $text
     $box.SelectionStart = 0
     $box.SelectionLength = 0
+
+    if ($Pixel -and $pixelFont) {
+        # Repainted only when the text changed, not on every tick. Painting 46 rows x 118 columns at
+        # scale 2 is about 1.5 s of SetPixel calls, which is longer than the fast tier's refresh
+        # interval -- so doing it on every tick would make the window lag its own subject.
+        if ($text -ne $script:lastPainted) {
+            $script:lastPainted = $text
+            $old = $pixelBox.Image
+            $pixelBox.Image = New-VsPixelPanel -Lines ($text -split "`r?`n") -Font $pixelFont `
+                -Scale $PixelScale -Cols 118 -MaxRows 46 -Bg $PANEL -Fg $INK
+            if ($old) { $old.Dispose() }
+        }
+    }
     return $script:gone
 }
 
@@ -308,7 +365,23 @@ $form.Add_FormClosed({
 # A GUI that can only be checked by looking at it is a GUI nobody checks. This project has no way to
 # see a window from a script, so the render path is made callable: if the panel can be produced and
 # printed, the window's contents are verified even though its pixels are not.
+if ($PixelPng) {
+    if (-not $Pixel) { Write-Error '-PixelPng needs -Pixel: there is no bitmap otherwise'; exit 2 }
+    $null = Refresh -Slow
+    Start-Sleep -Milliseconds 1500
+    $null = Refresh -Slow
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-VsPixelPanel -Lines ((Render) -split "`r?`n") -Font $pixelFont `
+        -Scale $PixelScale -Cols 118 -MaxRows 46 -Bg $PANEL -Fg $INK
+    $bmp.Save($PixelPng, [System.Drawing.Imaging.ImageFormat]::Png)
+    Write-Output ("bitmap {0}x{1} -> {2}" -f $bmp.Width, $bmp.Height, $PixelPng)
+    $bmp.Dispose()
+    Remove-Item -LiteralPath $tmpBase -Recurse -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
 if ($Introspect) {
+    Write-Output ("  [view: " + $(if ($Pixel) { "pixel glyphs, scale $PixelScale" } else { "system text" }) + "]")
     $null = Refresh -Slow
     Start-Sleep -Milliseconds 1200
     $null = Refresh -Slow

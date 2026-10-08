@@ -54,6 +54,18 @@ function New-VsPixelFont {
 }
 
 # Painted with SetPixel. Returns a bitmap; the caller owns it and must dispose the previous one.
+#
+# HOW TO CHECK THIS. Do not judge the output from a scaled-down preview -- that was tried twice in this
+# session and misread both times, and the second time cost several rounds of hunting a font bug that
+# did not exist. Print the bitmap as text instead, which is a character set nobody has to interpret:
+#
+#     $b = New-VsPixelPanel -Lines @('LIVE','AB') -Font $f -Scale 1 -Cols 6 -Bg $black -Fg $white
+#     for ($y=0; $y -lt $b.Height; $y++) { $l=''
+#       for ($x=0; $x -lt $b.Width; $x++) { $l += $(if ($b.GetPixel($x,$y).R -gt 100) {'#'} else {'.'}) }
+#       $l }
+#
+# And count the fallbacks rather than eyeballing them: one temporary `misses=` counter settled in a
+# single run what two rounds of guessing had not.
 function New-VsPixelPanel {
     param(
         [string[]]$Lines = @(),
