@@ -104,7 +104,7 @@ Commands:
   reveal process <pid>                            everything observable about a live process
   reveal chain <pid>                              inherited chain, recovered from history
   policy [show|allow <e>|deny <e>|mode <m>]        what stealth is permitted, and what happens to the rest
-  detain <pid> [--reason "..."] [--no-suspend]     freeze it, force its windows open, open a custody window
+  detain <pid> [--reason "..."] [--no-suspend] [--pixel]     freeze it, force its windows open, open a custody window
   isolate <path|pid> [--dry-run] [--include-system-root]
                      deny a file the right to execute, reversibly. Prints the icacls command that
                      undoes it, which works even if this tool is gone. A lock on a file does not
@@ -834,6 +834,7 @@ async function main() {
         custody: opts['no-custody'] !== true,
         topmost: opts['no-topmost'] !== true,
         reason: opts.reason ?? '',
+        pixel: opts.pixel === true,
       })
       if (opts.json) return emit(r)
       if (!r.ok) { console.log(C.red('FAIL') + ' detain: ' + r.detail); process.exit(1) }

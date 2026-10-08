@@ -25,7 +25,13 @@ param(
     [switch]$KeepOnTop,
     [string]$ActivityDir = '',
     [string]$PolicyFile = '',
-    [string]$Reason = ''
+    [string]$Reason = '',
+    [switch]$Pixel,
+    [ValidateRange(1, 6)][int]$PixelScale = 2,
+    # Render the panel to a PNG and exit without opening a window. The chamber has the same switch, and
+    # it exists for the same reason: a graphical claim needs a graphical check, and this project has no
+    # other way to look at a bitmap it produced. It touches nothing and suspends nothing.
+    [string]$PixelPng = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -186,6 +192,14 @@ try { $summary | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path 
 
 # ------------------------------------------------------------------ 3. custody window
 if (-not $NoCustody) {
+    $pixelFont = $null
+    if ($Pixel) {
+        $fontPath = Join-Path $PSScriptRoot 'pixelfont.ps1'
+        if (-not (Test-Path $fontPath)) { Write-Error "the pixel font is missing: $fontPath"; exit 2 }
+        . $fontPath
+        $pixelFont = New-VsPixelFont
+    }
+
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
@@ -222,8 +236,20 @@ or deleted -- this tool never quarantines. Read the evidence above and decide.
     $box.Dock = 'Fill'
     $box.BackColor = [System.Drawing.Color]::FromArgb(8, 10, 16)
     $box.ForeColor = [System.Drawing.Color]::FromArgb(150, 220, 180)
+    $box.Visible = -not $Pixel
     $form.Controls.Add($box)
     $box.BringToFront()
+
+    # The pixel view, the same way the chamber does it and for the same reason: `SetPixel` at an integer
+    # scale is the only way to get real pixel output out of GDI+, and this machine has no pixel font at
+    # all. The button row stays system-drawn -- it has to be clickable -- so this is pixel *body* over a
+    # normal frame, and saying "the window is pixel art" would overstate it.
+    $pixelBox = New-Object System.Windows.Forms.PictureBox
+    $pixelBox.Dock = 'Fill'
+    $pixelBox.BackColor = [System.Drawing.Color]::FromArgb(8, 10, 16)
+    $pixelBox.Visible = [bool]$Pixel
+    $form.Controls.Add($pixelBox)
+    $pixelBox.BringToFront()
 
     $buttons = New-Object System.Windows.Forms.Panel
     $buttons.Dock = 'Bottom'; $buttons.Height = 40
@@ -277,7 +303,18 @@ or deleted -- this tool never quarantines. Read the evidence above and decide.
         $lines += "--- modules (first 25) ---"
         if ($p) { foreach ($m in ($p.Modules | Select-Object -First 25)) { $lines += "  " + $m.FileName } }
 
-        $box.Text = ($lines -join "`r`n")
+        $text = ($lines -join "`r`n")
+        $box.Text = $text
+        if ($Pixel -and $pixelFont -and $text -ne $script:lastPainted) {
+            # Only when it changed: this panel repaints on a timer, and a full SetPixel pass costs more
+            # than the tick it would be running on.
+            $script:lastPainted = $text
+            $old = $pixelBox.Image
+            $pixelBox.Image = New-VsPixelPanel -Lines ($text -split "`r?`n") -Font $pixelFont `
+                -Scale $PixelScale -Cols 108 -MaxRows 40 -Bg ([System.Drawing.Color]::FromArgb(8, 10, 16)) `
+                -Fg ([System.Drawing.Color]::FromArgb(150, 220, 180))
+            if ($old) { $old.Dispose() }
+        }
     })
     $timer.Start()
 
@@ -314,6 +351,31 @@ or deleted -- this tool never quarantines. Read the evidence above and decide.
 
     try { $summary | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $ActivityDir ("detain-$TargetPid.json")) -Encoding UTF8 } catch { }
     Write-Output ($summary | ConvertTo-Json -Compress)
+    if ($PixelPng) {
+        if (-not $Pixel) { Write-Error '-PixelPng needs -Pixel'; exit 2 }
+        # One pass of the same code the timer runs, so the bitmap is the real panel rather than a
+        # reconstruction of it.
+        #
+        # `Start-Sleep` alone would not do it: a WinForms Timer needs a message pump, and sleeping
+        # blocks the very loop that would deliver its Tick. That is the first version, and it produced
+        # no bitmap at all -- which is the honest failure mode, and still a failure.
+        $timer.Start()
+        $deadline = (Get-Date).AddMilliseconds(2000)
+        while (-not $pixelBox.Image -and (Get-Date) -lt $deadline) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 50
+        }
+        $timer.Stop()
+        if ($pixelBox.Image) {
+            $pixelBox.Image.Save($PixelPng, [System.Drawing.Imaging.ImageFormat]::Png)
+            Write-Output ("bitmap {0}x{1} -> {2}" -f $pixelBox.Image.Width, $pixelBox.Image.Height, $PixelPng)
+        } else {
+            Write-Output 'no bitmap was produced'
+        }
+        $form.Close()
+        exit 0
+    }
+
     [void]$form.ShowDialog()
 } else {
     try { $summary | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $ActivityDir ("detain-$TargetPid.json")) -Encoding UTF8 } catch { }

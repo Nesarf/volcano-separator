@@ -4,6 +4,29 @@
 
 ### Added
 
+- **`--pixel`: the panel body drawn from this project's own 5x7 glyphs, in both windows.** `chamber
+  --window --pixel` and `detain --pixel` now rasterise their text with `SetPixel` at an integer scale
+  instead of handing it to Windows -- the only way to get real pixel output out of GDI+, since every
+  drawing primitive it offers smooths and this machine has no pixel font installed at all (zero matches
+  among 425 families).
+  - Off by default, and a mode rather than a replacement: the readable view stays the default and the
+    pixel one is a deliberate choice.
+  - Repainted only when the text changes, because 46 rows x 118 columns of `SetPixel` costs more than
+    the fast tier's refresh interval and painting every tick would make the window lag its own subject.
+  - The panel's own text had to become ASCII first. It used box-drawing and block characters the font
+    does not have, so a bar built from U+2588 drew as a row of "unknown" boxes -- a bar saying "cannot
+    read this" rather than "how much".
+  - Both windows have a headless check: `-PixelPng <path>` renders the real panel and exits without
+    opening anything. The custody one was first written with `Start-Sleep`, which cannot work -- a
+    WinForms Timer needs a message pump and sleeping blocks the loop that would deliver its Tick -- and
+    it now pumps `DoEvents` until the bitmap exists.
+
+### Fixed
+
+- **`detain.ps1` declares its own `-Pixel`/`-PixelScale`/`-PixelPng`.** Without them the switches
+  arrived as unbound arguments and the pixel view silently fell back to text -- a mode that reports
+  success and does the other thing.
+
 - **Pixel glyphs, drawn rather than rendered.** The style this project requires cannot come from system
   text rendering: PowerShell 5.1's WinForms text is antialiased, and this machine has **no pixel font
   installed at all** (checked: zero matches among 425 families). So `bin/pixelfont.ps1` ships its own
