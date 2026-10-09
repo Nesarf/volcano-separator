@@ -4,6 +4,33 @@
 
 ### Added
 
+- **`evidence` now reports the state of all four promotion requirements, not one number.** The gate in
+  `DESIGN` §4.2 has four conditions, and the tool printed a single total that spoke to none of them
+  directly. Each is now reported with what the record can actually say about it:
+
+  | requirement | state on this machine | |
+  |---|---|---|
+  | `ask` fired on real traffic | **0** | 5 days of evidence, every line `ask 0` |
+  | the human allowed it every time | **not collected** | nothing records what a human did with an ask |
+  | a quiet window with no findings | **not swept** | the daily line records the window it saw, not the quietest one |
+  | an action was undone, successfully | **46** | 69 applied, 69 restore refusals, `denyStillPresent: false` |
+
+  - **The thresholds are still not fixed, on purpose**, and the report does not invent one. `DESIGN`
+    says they "should be chosen after the first month of `ask` data", because "the current traffic is
+    far too thin to choose them now". A distance to an unchosen threshold would be a number this
+    function made up — the failure mode the gate exists to prevent.
+  - **"Not collected" is one of the reported states**, which is the point rather than a gap: a
+    requirement with no data source looks exactly like a requirement that is being met to anyone
+    reading a green summary.
+  - **The blocker is now named:** `fired`. The undo requirement — which I had guessed was the weak one,
+    before measuring — is satisfied 46 times over, mostly from the test suite, which is worth knowing
+    when judging it.
+  - One bug found by the report disagreeing with a direct query: sizing the record read to the evidence
+    days gave `files: 7`, which returns **zero** isolate events, while `files: 8` returns 298. The
+    requirement asks *whether* the undo has ever run, and a window is the wrong shape for that
+    question — it now reads the widest window available. A window-shaped reader would have reported
+    "never run" about a machine where it had run 46 times.
+
 - **`warm`, `serve` and `heal` refuse a service that declares no repair sequence.** The DSH descriptor's
   own comment said *"the CLI refuses them for this service"* — and the CLI did no such thing. It called
   all three for whatever service it was pointed at: a uvx build, a warm-up budget and a proxy launch,

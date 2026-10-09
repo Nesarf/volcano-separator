@@ -488,6 +488,28 @@ outside is a legitimate design; a room the tool itself cannot open is not.** So 
 same requirement as everything else here: the way out is documented, printed, and works without this
 tool running.
 
+### 12.4.1 No contact with the sibling projects yet (2026-10-10)
+
+**`nanodesu`, `torikago` and `ichiwatashi` are being developed separately, and this tool must not
+reach into them.** Stated by the user while the pixel work was in flight, which is why it is written
+down rather than assumed: the temptation is obvious and it runs in the direction of less work.
+
+The temptation is concrete. `ichiwatashi` is a pixel-art tool, and this tool now draws pixel glyphs.
+Reaching for it would mean borrowing a font, an icon set or a palette from a project whose own notes
+say it is still calibrating its criteria — and that would couple a watchdog, whose value is that it
+depends on nothing, to a project mid-design. The notes state the rule for the sibling already:
+`§12.5` records that `ichiwatashi` is where art assets belong, and that this tool's `pixelfont.ps1`
+is **"enough and then stops"**.
+
+**Verified rather than asserted** (2026-10-10): `grep -ri` for `nanodesu`, `torikago`, `ichiwatashi`
+and `一渡始` across every `.mjs`, `.ps1`, `.md` and `.json` in this repository returns **nothing**,
+and no path in `lib/` or `bin/` points at another project's checkout. `pixelfont.ps1`, `chamber.ps1`
+and `detain.ps1` contain zero references to any of them, and the font ships its **own 62 glyphs**.
+
+So the current shape is the required one: this tool's pixel layer is self-contained by construction.
+**That is a constraint to hold, not a state to drift out of** — the first shared asset would be the
+end of it.
+
 ### 12.5 Art and UI are pixel art (2026-10-06)
 
 Every art asset and every piece of UI this project grows is **pixel art**. A standing constraint, not

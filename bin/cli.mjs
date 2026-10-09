@@ -911,7 +911,8 @@ async function main() {
 
     case 'evidence': {
       const days = g.readEvidence(ctx)
-      if (opts.json) return emit({ ok: true, days })
+      const gate = g.promotionGate(ctx)
+      if (opts.json) return emit({ ok: true, days, gate })
       if (!days.length) {
         console.log('no evidence yet: the heartbeat rolls up one line a day')
         console.log(C.dim('  it starts accumulating the first time the watchdog task runs with --signals'))
@@ -925,7 +926,28 @@ async function main() {
       }
       console.log('')
       console.log(`  ${total} time(s) in ${days.length} day(s) -- a mode other than observe would have acted that often`)
-      console.log(C.dim('  DESIGN-enforcement.md will not promote a rule until this is a sample, not a number'))
+      console.log('')
+
+      // The four requirements, each with what the record can actually say. DESIGN declines to fix the
+      // thresholds until there is a month of ask data, so a distance to one would be a number invented
+      // here. What can be reported is the state of each requirement -- and "not collected" is one of
+      // the states, which matters because a requirement with no data source looks exactly like a
+      // requirement that is being met to anyone reading a summary.
+      console.log(C.dim('  the four requirements before a rule may become automatic (DESIGN 4.2):'))
+      for (const r of gate.requirements) {
+        const mark = r.state === 'not collected' || r.state === 'not swept' ? C.yellow('[--]')
+          : r.measured > 0 ? C.green('[ok]') : C.yellow('[no]')
+        const value = r.measured === null ? '' : ` ${r.measured}`
+        console.log(`    ${mark} ${String(r.id).padEnd(7)}${value}`)
+        console.log(C.dim(`        ${r.what}`))
+        console.log(C.dim(`        ${r.detail}`))
+      }
+      console.log('')
+      if (gate.blocking) {
+        console.log(C.yellow(`  blocked on: ${gate.blocking}`) + ' -- ' + C.dim(gate.blocksWhy))
+      } else {
+        console.log(C.green('  no requirement is a blocker; the thresholds themselves are still unchosen'))
+      }
       break
     }
 
