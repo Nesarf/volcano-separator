@@ -131,7 +131,7 @@ Options: `--profile <name>` (default `coding-agent`), `--port <n>` (default `907
 |---|---|---|
 | CLI | `bin/cli.mjs` | humans, scripts, the scheduled task |
 | Library | `lib/core.mjs` | other tools (pure Node, zero dependencies) |
-| MCP | `lib/mcp.mjs` | any harness — 13 tools, listed below |
+| MCP | `lib/mcp.mjs` | any harness — 16 tools, listed below |
 
 The MCP surface is **read-only apart from `heal`**, and that is the design rather than a stage of
 completion.
@@ -141,12 +141,17 @@ completion.
 | service | `volcano_status` `volcano_doctor` |
 | machine | `volcano_resources` `volcano_ps` `volcano_redline` |
 | record | `volcano_activity` `volcano_busy` |
-| detection | `volcano_signals` `volcano_decide` |
-| custody | `volcano_detained` `volcano_timeline` |
+| detection | `volcano_signals` `volcano_decide` `volcano_evidence` |
+| custody | `volcano_detained` `volcano_timeline` `volcano_isolated` |
 | cache | `volcano_cache_plan` |
+| repair | `volcano_heal_status` |
 
-`volcano_heal` is the one that changes state: it repairs a service the agent is usually the reason
-for needing, removes nothing, and the worst outcome is a slower path to the same place.
+`volcano_heal` is the one that starts something: it repairs a service the agent is usually the
+reason for needing, removes nothing, and the worst outcome is a slower path to the same place.
+**It does not block.** A healthy service is answered in about 50 ms; a repair that is actually
+needed is handed to its own process and the call returns a receipt, which `volcano_heal_status`
+follows. That split is what let this server's tool timeout come down from thirty minutes to five —
+before it, every one of these sixteen tools shared a timeout chosen for the slowest possible repair.
 
 There is no `volcano_detain`, `volcano_release`, `volcano_cache_apply` or `volcano_policy_allow`.
 Freezing a process or deleting cache entries are decisions a human should make, and `cache_plan`
@@ -271,6 +276,37 @@ means replacing the platform layer — a launchd plist or systemd timer in place
 task — not rewriting the logic. `package.json` therefore declares no `os` restriction, because that
 field constrains where a package may be installed rather than what it supports, and this package
 installs and runs its portable parts anywhere Node does.
+
+## Modules
+
+`lib/` is layered, and **the layers are checkable by reading the import lines** rather than by
+trusting this table. Two modules import nothing local; everything else imports only downward.
+
+```
+platform · commandline                     leaves: one spawns and reads, one parses a command line
+  ↑
+  policy · lock · service · database · uvcache · vault · redline
+  ↑
+  resources · activity · enforce · live
+  ↑
+  crypt · custody · signals · chamber
+  ↑
+  supervisor                                 the staged recovery, and the only thing that starts services
+  ↑
+  core                                       config + context + the re-export facade
+  ↑
+  mcp · bin/cli.mjs                          the two entry points
+```
+
+Two things worth knowing that the shape does not show:
+
+- **`crypt` and `enforce` are not re-exported through `core`.** The CLI imports them as namespaces
+  (`cry.`, `enf.`), because they are the two modules that touch secrets and ACLs and a caller should
+  have to name them to reach them.
+- **`vault` is likewise not facaded.** It is the only operation that moves a file.
+
+`chamber` sits where it does because it composes two sources that must not be confused: live facts
+from a probe, and per-pid history from the record. It reads `custody` for the second.
 
 ## Configuration
 
