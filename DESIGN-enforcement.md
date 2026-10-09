@@ -415,6 +415,34 @@ the work is needed. A test pointed `beginHeal` at a dead port, it decided a repa
 started one, and the worker found the real service healthy and exited without touching it. A parent that
 wrongly believes a repair is needed cannot cause one.
 
+### 12.0.1 The MCP tool timeout, and the measurement it now rests on
+
+The server is registered on the DSH side with a per-server tool timeout, and it was **thirty minutes**.
+That figure was chosen for one tool: `heal`, whose worst real repair has been measured at half an hour.
+All sixteen tools shared it, and fifteen of them are read-only probes.
+
+Once `heal` stopped blocking (12.0), nothing in this server needs minutes, so the timeout was measured
+down and set to **five minutes**. The evidence, all of it wall time on this machine via the CLI, which
+includes process startup and is therefore an upper bound:
+
+| tool | measured | note |
+|---|---|---|
+| `cache_plan` | **27,009 ms** | the only genuinely slow one; it walks the uv cache |
+| `redline` | 4,200 ms | its own traversal budget is 45 s, so a slower machine goes higher |
+| `resources` | 1,610 ms | |
+| `status` / `timeline` | ~1,300 ms | |
+| the other eleven | under 2 s | `isolated` 97 ms, `doctor` 115 ms, `heal` 140 ms, `activity` 181 ms |
+
+Five minutes is roughly **eleven times** the slowest measurement, and it turns the cost of a hung probe
+from half an hour into five minutes.
+
+**A limit worth stating rather than glossing:** the timeout lives in the host's profile patch
+(`~/.dsh-home/profiles/web/cordis.patch.yml`), the profile tree is composed at boot, and the root config
+is rewritten on every boot. So the change **takes effect on the next boot**, and the merged result
+cannot be read out of a running host without restarting it. What was verified is that the file parses
+with the same parser the host uses and that the entry still carries its `id`, `name`, transport, command,
+args and server name. What was **not** verified is the composed value at boot — that needs a restart.
+
 ### 12.1 The boundary that decides everything here
 
 **This tool does not inject into the target.** That is stated in `detain.ps1` and it is the invariant

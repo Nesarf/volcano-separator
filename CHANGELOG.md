@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Changed
+
+- **The MCP tool timeout went from thirty minutes to five, on measurement.** It had been set for one
+  tool — `heal`, whose worst real repair measured half an hour — and **all sixteen tools shared it**,
+  fifteen of which are read-only probes. Now that `heal` no longer blocks, the timeout was measured down.
+
+  Wall time per tool on this machine, via the CLI, so process startup is included and these are upper
+  bounds:
+
+  | tool | measured | |
+  |---|---|---|
+  | `cache_plan` | **27,009 ms** | the only genuinely slow one — it walks the uv cache |
+  | `redline` | 4,200 ms | its own traversal budget is 45 s, so a slower machine goes higher |
+  | `resources` | 1,610 ms | |
+  | `status` / `timeline` | ~1,300 ms | |
+  | the other eleven | under 2 s | `isolated` 97 ms, `doctor` 115 ms, `heal` 140 ms, `activity` 181 ms |
+
+  Five minutes is about **eleven times** the slowest measurement, and it cuts the cost of a hung probe
+  from half an hour to five minutes.
+
+  **What was verified and what was not.** The timeout lives in the host's profile patch, whose tree is
+  composed at boot. The file was parsed with the same parser the host uses, and the entry still carries
+  its `id`, `name`, transport, command, args and server name after the edit — an earlier attempt at this
+  edit deleted the whole `- insert:` block, which the parse check caught. What was **not** verified is
+  the composed value at boot: that needs a host restart, so it is stated as pending rather than claimed.
+
 ### Fixed
 
 - **Isolation restore refused every journal this tool wrote, and the cause was a cmdlet that does not
