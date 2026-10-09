@@ -159,6 +159,7 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
+  --service <id>     which service descriptor applies (hindsight, dsh)
   --no-activity      install-service: skip the system-wide activity recorder
   --dry-run          for install-service: print what would happen
 `
@@ -182,6 +183,10 @@ async function main() {
   const ctx = g.resolveContext({
     ...(opts.profile ? { profile: opts.profile } : {}),
     ...(opts.port ? { port: Number(opts.port) } : {}),
+    // `--service` selects which descriptor applies. It is the only way to exercise the refusal paths
+    // for a service this machine is not currently configured for, and without it the gate below could
+    // only ever be tested by editing the config file.
+    ...(opts.service ? { service: String(opts.service) } : {}),
   })
   const projectDir = opts.project ? resolve(opts.project) : PROJECT_DIR
   const log = logFactory(opts.quiet)
@@ -209,12 +214,50 @@ async function main() {
     }
 
     case 'warm': {
+      // Gate BEFORE anything else, including custody reconciliation. `warm`, `serve` and `heal` are one
+      // service's sequence -- a uvx build, a daemon start and a watch -- and the descriptor of the
+      // service this command was pointed at is what says whether they mean anything for it.
+      //
+      // This is not hypothetical tidiness. The CLI used to run all three for any service, so pointing
+      // it at the DSH host would have run uvx against it; and the DSH descriptor's own comment claimed
+      // "the CLI refuses them for this service" while nothing did. A comment describing an intention is
+      // not an implementation, and the gap between them is exactly what this tool exists to remove.
+      const seq = g.recoverySequence(ctx.serviceDescriptor)
+      if (!seq) {
+        const detail = `${cmd} is part of a repair sequence this tool implements for another service; ` +
+          `${ctx.serviceLabel ?? ctx.serviceId} declares none, so there is nothing to run`
+        if (opts.json) return emit({ ok: false, refused: true, service: ctx.serviceId, detail })
+        console.log(C.red('refused') + ': ' + detail)
+        if (ctx.serviceId) console.log(C.dim(`  service: ${ctx.serviceId} (${ctx.serviceDescriptor?.label ?? '?'})`))
+        console.log(C.dim('  This is a refusal, not a failure: nothing was attempted, and nothing changed.'))
+        process.exit(3)
+      }
+
       const r = await g.warm(ctx, { force: opts.force, log })
       emit(r, `${r.ok ? C.green('ok') : C.red('FAIL')} warm: ${r.detail}`)
       process.exit(r.ok ? 0 : 1)
     }
 
     case 'serve': {
+      // Gate BEFORE anything else, including custody reconciliation. `warm`, `serve` and `heal` are one
+      // service's sequence -- a uvx build, a daemon start and a watch -- and the descriptor of the
+      // service this command was pointed at is what says whether they mean anything for it.
+      //
+      // This is not hypothetical tidiness. The CLI used to run all three for any service, so pointing
+      // it at the DSH host would have run uvx against it; and the DSH descriptor's own comment claimed
+      // "the CLI refuses them for this service" while nothing did. A comment describing an intention is
+      // not an implementation, and the gap between them is exactly what this tool exists to remove.
+      const seq = g.recoverySequence(ctx.serviceDescriptor)
+      if (!seq) {
+        const detail = `${cmd} is part of a repair sequence this tool implements for another service; ` +
+          `${ctx.serviceLabel ?? ctx.serviceId} declares none, so there is nothing to run`
+        if (opts.json) return emit({ ok: false, refused: true, service: ctx.serviceId, detail })
+        console.log(C.red('refused') + ': ' + detail)
+        if (ctx.serviceId) console.log(C.dim(`  service: ${ctx.serviceId} (${ctx.serviceDescriptor?.label ?? '?'})`))
+        console.log(C.dim('  This is a refusal, not a failure: nothing was attempted, and nothing changed.'))
+        process.exit(3)
+      }
+
       const r = await g.serve(ctx, { log })
       emit(r, `${r.ok ? C.green('ok') : C.red('FAIL')} serve: ${r.detail}`)
       process.exit(r.ok ? 0 : 1)
@@ -235,6 +278,25 @@ async function main() {
     }
 
     case 'heal': {
+      // Gate BEFORE anything else, including custody reconciliation. `warm`, `serve` and `heal` are one
+      // service's sequence -- a uvx build, a daemon start and a watch -- and the descriptor of the
+      // service this command was pointed at is what says whether they mean anything for it.
+      //
+      // This is not hypothetical tidiness. The CLI used to run all three for any service, so pointing
+      // it at the DSH host would have run uvx against it; and the DSH descriptor's own comment claimed
+      // "the CLI refuses them for this service" while nothing did. A comment describing an intention is
+      // not an implementation, and the gap between them is exactly what this tool exists to remove.
+      const seq = g.recoverySequence(ctx.serviceDescriptor)
+      if (!seq) {
+        const detail = `${cmd} is part of a repair sequence this tool implements for another service; ` +
+          `${ctx.serviceLabel ?? ctx.serviceId} declares none, so there is nothing to run`
+        if (opts.json) return emit({ ok: false, refused: true, service: ctx.serviceId, detail })
+        console.log(C.red('refused') + ': ' + detail)
+        if (ctx.serviceId) console.log(C.dim(`  service: ${ctx.serviceId} (${ctx.serviceDescriptor?.label ?? '?'})`))
+        console.log(C.dim('  This is a refusal, not a failure: nothing was attempted, and nothing changed.'))
+        process.exit(3)
+      }
+
       const t0 = Date.now()
       // Custody reconciliation, run BEFORE the service chain is touched. A suspension is
       // persistent, so a freeze nobody came back for stays frozen forever, and the only moment it

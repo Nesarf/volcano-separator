@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **`warm`, `serve` and `heal` refuse a service that declares no repair sequence.** The DSH descriptor's
+  own comment said *"the CLI refuses them for this service"* — and the CLI did no such thing. It called
+  all three for whatever service it was pointed at: a uvx build, a warm-up budget and a proxy launch,
+  none of which mean anything for a host started by its installer. **A comment describing an intention is
+  not an implementation**, and the gap between the two is exactly what this tool exists to remove.
+  - The decision is **declared on the descriptor** (`recovery: { verbs, why }` on the service that has
+    one) rather than inferred from the id, so a third service can declare a sequence without the
+    refusal code moving.
+  - It refuses **as a distinct outcome**: exit **3**, which this tool already uses for "a real answer
+    that is not 0". Not a failure, and not success.
+  - `--service <id>` was added and wired to the context. It did not exist, so the refusal could only
+    have been exercised by editing the config file on disk. An unknown id is an **error** (exit 1), not
+    a refusal — nothing can be said about a service this tool has never heard of.
+  - **`beginHeal` is gated too, and that is the part worth stating**: for a service with no sequence it
+    answers without spawning a worker. A spawned process whose only possible outcome is a refusal is
+    worse than a refusal that never started.
+  - Checks: 5 on the command surface (three refusals at exit 3, an unknown service at exit 1, and the
+    service that does have a sequence still at 0) and 8 in the suite, including that no worker starts.
+
 ### Changed
 
 - **The MCP tool timeout went from thirty minutes to five, on measurement.** It had been set for one

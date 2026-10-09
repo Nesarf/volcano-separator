@@ -2308,6 +2308,50 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
 }
 
+// ── the repair sequence belongs to one service, and says so ──
+{
+  section('a repair sequence is declared, not assumed')
+  const g = await import('../lib/core.mjs')
+
+  ok('the judgement is part of the surface', typeof g.recoverySequence === 'function', typeof g.recoverySequence)
+
+  const own = g.resolveContext({})
+  const other = g.resolveContext({ service: 'dsh' })
+
+  ok('the service this tool repairs declares a sequence',
+    Boolean(g.recoverySequence(own.serviceDescriptor)),
+    JSON.stringify(g.recoverySequence(own.serviceDescriptor)))
+  ok('and the host it merely observes declares none',
+    g.recoverySequence(other.serviceDescriptor) === null,
+    JSON.stringify(g.recoverySequence(other.serviceDescriptor)))
+
+  // The judgement is on the descriptor, so a third service could declare one without this code moving.
+  ok('the judgement reads the descriptor rather than the id',
+    g.recoverySequence({ recovery: { verbs: ['x'] } }) !== null &&
+    g.recoverySequence({ id: 'dsh' }) === null, 'it is not id-based')
+
+  // The part that matters: no worker is started for a service with nothing to run. A spawned process
+  // whose only possible outcome is a refusal is worse than a refusal that never started.
+  {
+    const t0 = Date.now()
+    const r = await g.beginHeal(other, {})
+    ok('beginHeal answers rather than starting a repair for a service with no sequence',
+      r.done === true && r.needed === false && r.noSequence === true,
+      JSON.stringify({ done: r.done, needed: r.needed, noSequence: r.noSequence }))
+    ok('and it answers immediately, because it did not probe a service it cannot repair',
+      Date.now() - t0 < 2000, `${Date.now() - t0} ms`)
+    ok('and the refusal names the service rather than the tool',
+      /declares no repair sequence/.test(String(r.detail)), String(r.detail))
+  }
+
+  // And the service that does have one is unaffected.
+  {
+    const r = await g.beginHeal(own, {})
+    ok('the service with a sequence still answers about its health',
+      r.done === true && r.noSequence !== true, JSON.stringify({ done: r.done, detail: String(r.detail).slice(0, 40) }))
+  }
+}
+
 // ── heal is two things, and only one of them may block ──
 // The healthy path is 46 ms measured. A real repair measured 30 minutes at worst. One MCP tool timeout
 // served both, and all fifteen tools shared it, so a hung read-only probe could make a caller wait half

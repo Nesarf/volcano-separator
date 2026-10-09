@@ -52,6 +52,17 @@ const COMMANDS = [
   ['encrypted', { args: ['encrypted'], want: [0] }],
   ['vaulted', { args: ['vaulted'], want: [0] }],
   ['chamber (bad pid)', { args: ['chamber', 'not-a-pid'], want: [2] }],
+  // The repair sequence belongs to one service. Pointed at a service that declares none, the three
+  // verbs must refuse -- and refuse as a distinct outcome, not as a failure and not as success.
+  // Exit 3 already means "a real answer that is not 0", which is exactly what this is.
+  ['warm (other service)', { args: ['warm', '--service', 'dsh'], want: [3] }],
+  ['serve (other service)', { args: ['serve', '--service', 'dsh'], want: [3] }],
+  ['heal (other service)', { args: ['heal', '--service', 'dsh'], want: [3] }],
+  // A descriptor that does not exist is an error, not a refusal: nothing can be said about a service
+  // this tool has never heard of, and pretending otherwise would be a silent fallback.
+  ['warm (unknown service)', { args: ['warm', '--service', 'no-such-service'], want: [1] }],
+  // And the service that does declare a sequence still works.
+  ['warm (own service)', { args: ['warm'], want: [0] }],
   ['chamber (gone pid)', { args: ['chamber', '999999'], want: [0] }],
   ['timeline', { args: ['timeline'], want: [0] }],
   ['service', { args: ['service'], want: [0] }],
