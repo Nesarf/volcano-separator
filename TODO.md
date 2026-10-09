@@ -312,3 +312,69 @@ character. It is recorded here because the pattern is the finding, not the indiv
   evidence, and it should be a decision rather than a cleanup script someone runs while passing.
 - **Record the outcome in `DESIGN-enforcement.md`** beside the gate table, which currently states the
   gate's first row as a requirement rather than as a measured number. It is now measured: 3.
+
+---
+
+## Isolation restore rejects a journal that isolation just wrote (6 checks failing at HEAD)
+
+**Added:** 2026-10-10 · **Status:** open, not understood · **Scope:** small but state-carrying
+
+`npm test` is **6 of 473 FAILED** on a clean checkout of `c662dd3`, with no local modifications. The
+failures are all in the isolation section and all read the same way:
+
+```
+refused to restore: this journal carries no signature, so this tool cannot vouch for it
+```
+
+### What is actually known
+
+The refusal comes from exactly one place, `bin/isolate.ps1` line 102:
+
+```powershell
+if (-not $Spec.hmac -or -not $Spec.backupSha256) {
+    return @{ ok = $false; why = 'this journal carries no signature, ...' }
+}
+```
+
+So `$Spec` has no `hmac`. But the same run's other assertion prints the journal it built, and that
+list **does** contain `hmac` and `backupSha256`:
+
+```
+["backupFile","id","aclBefore","elevated","hmac","state","denySpec","journalFile",
+ "restoreCommand","kind","at","backupSha256","path","keyFile"]
+```
+
+**So the journal that was written has a signature, and the journal that was read does not.**
+Those are two different reads of two different things, and nothing established so far says which.
+
+### What has been ruled out
+
+- **Not caused by any local change.** `git stash` to a clean `c662dd3` reproduces all 6.
+- **Not the test's own scratch state.** The suite's `vsep-*` directories are removed after a run, and
+  the live journal directory `%USERPROFILE%\.volcano-separatorcl` contains only an empty
+  `.paths.tmp` from 2026-10-06. Neither holds a stray journal.
+- **Not the new `heal` split.** The failures reproduce with that work stashed.
+- **Not a missing field in the writer.** See above: the field list has it.
+
+### Why this matters more than six checks
+
+This is the one operation in the tool that **moves a file's protection state**. A restore that refuses
+is the safe direction, and that is worth saying — the failure is loud and it denies, rather than
+silently lifting a lock. But the same code path is what a real restore would take, so "restore is
+broken on this machine" is a claim worth resolving rather than tolerating.
+
+It also explains an observation from an earlier session that was recorded as unexplained: one run of
+the suite reported `2 of 473 checks FAILED` and could not be reproduced. State that carries across runs
+is exactly how a failure count changes between runs.
+
+### Where to look next
+
+1. Print `$Spec` **inside** `Test-Journal`, immediately before the guard. That distinguishes the two
+   readings in one run and costs one edit.
+2. Check whether `Get-Content | ConvertFrom-Json` can yield `$null` or a bodyless object for a file
+   that exists and reads as valid JSON with `hmac` in it — a BOM was already a bug here once
+   (`readJsonLoose` exists because of it).
+3. Confirm both halves resolve the **same** journal directory. `isolate` writes to
+   `$JournalDir` and restore is handed a path; if those ever disagree, this is the error you would see,
+   and it is the same class of bug as the spawned-recovery directory mismatch found in the same
+   session.

@@ -2,7 +2,40 @@
 
 ## Unreleased
 
+### Changed
+
+- **`volcano_heal` no longer blocks, and `volcano_heal_status` follows it.** Heal is two things wearing
+  one name and they differ by three orders of magnitude in cost: the healthy path is **46 ms measured**
+  (one TCP connection, no lock, no mutation) and a real repair has been **measured at 30 minutes** on
+  this machine. The MCP server's tool timeout was set to thirty minutes for that one case and **all
+  fifteen tools share it**, so a hung read-only probe would make a caller wait half an hour for an
+  answer that should have taken a second.
+  - Healthy still answers synchronously and at the same cost. A repair that is genuinely needed is
+    handed to its own process, and the caller gets a receipt to poll.
+  - The spawned worker is a CLI invocation carrying an environment marker rather than a second copy of
+    the recovery sequence. It is owned by `Start-Process`, because a detached child still dies with its
+    parent on Windows -- the harness runs tool calls inside a job object, which is exactly how
+    `detain`'s window failed once: perfect by hand, nothing through the CLI.
+  - **The decision is re-checked where the work happens.** Observed rather than assumed: a test pointed
+    `beginHeal` at a dead port, it correctly decided a repair was needed and started one, and the worker
+    found the real service healthy and exited without touching it. So a parent that wrongly believes a
+    repair is needed cannot cause one.
+  - The worker is told which directories to use through its environment. Without that it resolves its
+    own from the real config while the caller may be using overridden ones -- and the caller then reads
+    journals it did not write, surfacing as "this journal carries no signature", which points at the
+    journal instead of at the directory.
+
 ### Added
+
+- **A TODO entry for a pre-existing failure, recorded rather than buried:** `npm test` is **6 of 473
+  FAILED on a clean `c662dd3`** with no local modifications, all in the isolation section, all reading
+  `refused to restore: this journal carries no signature`. The refusal has exactly one source
+  (`isolate.ps1:102`, a guard that fires only when `$Spec.hmac` is absent) while the same run's other
+  assertion prints a journal whose field list **contains** `hmac`. So the written journal has a
+  signature and the read one does not, and nothing yet says which is which. Ruled out: local changes
+  (reproduces stashed), the suite's scratch state, and the heal split. It is also the likely explanation
+  for the unexplained `2 of 473 FAILED` seen in an earlier session -- state that carries between runs
+  is how a failure count changes between runs.
 
 - **`--pixel`: the panel body drawn from this project's own 5x7 glyphs, in both windows.** `chamber
   --window --pixel` and `detain --pixel` now rasterise their text with `SetPixel` at an integer scale

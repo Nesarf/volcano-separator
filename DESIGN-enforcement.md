@@ -389,6 +389,32 @@ The capability asked for: when a process will not show what it is doing, put it 
 anyway, and keep it there. Written down before it is built, because half of this capability is a
 statement about what it cannot do.
 
+### 12.0 Why `heal` does not block, and what that lets the tool timeout be
+
+`heal` was one name for two operations three orders of magnitude apart in cost. Measured on this
+machine: **46 ms** when the service is healthy, and **30 minutes** at worst for a real repair -- the
+latter figure is quoted in `supervisor.mjs` itself, from 514 heartbeats of which 16 overlapped and the
+worst ran half an hour.
+
+The MCP server was given a **thirty-minute** tool timeout for that one case, and **all fifteen tools
+share it**. Fourteen of them are read-only probes that answer in under a second, so a hung probe would
+make a caller wait half an hour for something that should have taken one.
+
+The fix is not a smaller timeout. It is that the slow half stopped being something a caller waits for:
+
+| | before | now |
+|---|---|---|
+| healthy | 46 ms, synchronous | **46 ms, synchronous** -- unchanged |
+| repair needed | blocks up to 30 min | **returns a receipt**, repair runs in its own process |
+
+That is what makes a short tool timeout honest to set: nothing this server exposes is supposed to take
+minutes any more. See `beginHeal` / `healStatus` in `supervisor.mjs`.
+
+**The safety property, observed rather than assumed:** the process that does the work re-checks whether
+the work is needed. A test pointed `beginHeal` at a dead port, it decided a repair was needed and
+started one, and the worker found the real service healthy and exited without touching it. A parent that
+wrongly believes a repair is needed cannot cause one.
+
 ### 12.1 The boundary that decides everything here
 
 **This tool does not inject into the target.** That is stated in `detain.ps1` and it is the invariant
