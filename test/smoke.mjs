@@ -2292,6 +2292,59 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
 }
 
+// ── heal is two things, and only one of them may block ──
+// The healthy path is 46 ms measured. A real repair measured 30 minutes at worst. One MCP tool timeout
+// served both, and all fifteen tools shared it, so a hung read-only probe could make a caller wait half
+// an hour for an answer that should have taken a second.
+{
+  section('heal does not block on the slow half')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  ok('beginHeal is part of the surface', typeof g.beginHeal === 'function', typeof g.beginHeal)
+  ok('and healStatus with it', typeof g.healStatus === 'function', typeof g.healStatus)
+
+  // The common case, and the one that has to stay cheap.
+  {
+    const t0 = Date.now()
+    const r = await g.beginHeal(ctx, {})
+    const ms = Date.now() - t0
+    ok('a healthy service is answered synchronously', r.done === true && r.needed === false,
+      JSON.stringify({ done: r.done, needed: r.needed }))
+    // The bound is loose on purpose: a tight one would fail on a busy machine and prove nothing.
+    ok('and cheaply, in the same order as the old fast path', ms < 5000, `${ms} ms`)
+  }
+
+  {
+    const t0 = Date.now()
+    const s = await g.healStatus(ctx)
+    ok('healStatus answers', s.ok === true && typeof s.running === 'boolean',
+      JSON.stringify({ ok: s.ok, running: s.running }))
+    ok('and cheaply', Date.now() - t0 < 5000, `${Date.now() - t0} ms`)
+    ok('and names where the log is', typeof s.logFile === 'string' && s.logFile.length > 3, s.logFile)
+    // It answers from files, not from memory, which is the point: the process that started the repair
+    // is meant to be gone by the time anyone asks.
+    ok('and reports the service from the service, not from the log',
+      typeof s.healthDetail === 'string' && s.healthDetail.length > 0, s.healthDetail)
+  }
+
+  // The decision to repair must be re-checked where the work happens -- observed, not assumed.
+  {
+    const fake = { ...ctx, servicePort: 59999, port: 59999 }
+    const r = await g.beginHeal(fake, {})
+    ok('an unreachable service is reported as needing repair, not as healthy',
+      r.needed === true && r.done !== true, JSON.stringify({ needed: r.needed, done: r.done }))
+    ok('and the call returns rather than waiting for the repair',
+      r.started === true || r.ok === false, JSON.stringify({ started: r.started, ok: r.ok }))
+
+    await new Promise((res) => setTimeout(res, 2500))
+    const after = await g.probeDaemon(ctx)
+    ok('and the real service is untouched by it', after.ok === true, after.detail)
+    const s = await g.healStatus(ctx)
+    ok('and no recovery lock is left behind', s.running === false, JSON.stringify(s.holder))
+  }
+}
+
 // ── the chamber profile: one process, and the two histories that are not the same ─
 {
   section('the chamber profile')
