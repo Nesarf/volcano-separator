@@ -315,66 +315,65 @@ character. It is recorded here because the pattern is the finding, not the indiv
 
 ---
 
-## Isolation restore rejects a journal that isolation just wrote (6 checks failing at HEAD)
+## Isolation restore rejected a journal that isolation just wrote — FIXED
 
-**Added:** 2026-10-10 · **Status:** open, not understood · **Scope:** small but state-carrying
+**Added:** 2026-10-10 · **Status:** fixed and verified · **Scope:** small, but it was the undo path
 
-`npm test` is **6 of 473 FAILED** on a clean checkout of `c662dd3`, with no local modifications. The
-failures are all in the isolation section and all read the same way:
+`npm test` was **6 of 473 FAILED on a clean `c662dd3`** with no local modifications, all isolate-section,
+all reading `refused to restore: this journal carries no signature`.
 
-```
-refused to restore: this journal carries no signature, so this tool cannot vouch for it
-```
-
-### What is actually known
-
-The refusal comes from exactly one place, `bin/isolate.ps1` line 102:
-
-```powershell
-if (-not $Spec.hmac -or -not $Spec.backupSha256) {
-    return @{ ok = $false; why = 'this journal carries no signature, ...' }
-}
-```
-
-So `$Spec` has no `hmac`. But the same run's other assertion prints the journal it built, and that
-list **does** contain `hmac` and `backupSha256`:
+### Root cause: `Get-FileHash` does not exist on this host
 
 ```
-["backupFile","id","aclBefore","elevated","hmac","state","denySpec","journalFile",
- "restoreCommand","kind","at","backupSha256","path","keyFile"]
+PS> Get-Command Get-FileHash
+(nothing)
 ```
 
-**So the journal that was written has a signature, and the journal that was read does not.**
-Those are two different reads of two different things, and nothing established so far says which.
+`Get-FileHash` lives in `Microsoft.PowerShell.Utility`, and **its presence cannot be assumed**. Measured
+here it is absent, so `(Get-FileHash ...).Hash` evaluated to `$null` — and the script runs with
+`$ErrorActionPreference = 'SilentlyContinue'`, which turned a missing cmdlet into a missing value with
+nothing said.
 
-### What has been ruled out
+That one fact produced three separate symptoms:
 
-- **Not caused by any local change.** `git stash` to a clean `c662dd3` reproduces all 6.
-- **Not the test's own scratch state.** The suite's `vsep-*` directories are removed after a run, and
-  the live journal directory `%USERPROFILE%\.volcano-separatorcl` contains only an empty
-  `.paths.tmp` from 2026-10-06. Neither holds a stray journal.
-- **Not the new `heal` split.** The failures reproduce with that work stashed.
-- **Not a missing field in the writer.** See above: the field list has it.
+1. **The writer proceeded with an unverifiable journal.** `$backupSha` was null, the journal was written
+   with `"backupSha256": null` beside a perfectly valid `hmac`, and **the ACL was denied anyway**. An act
+   that cannot be undone had been performed.
+2. **The restore path failed its comparison** for the same reason — `$actual` was null there too, so the
+   hash check could never pass. That is the actual mechanism behind the six failures.
+3. **The refusal named the wrong field.** One guard covered both conditions and always said "no
+   signature", while the journal that triggered it had a valid signature and a null backup hash. The
+   wording sent the reader to the field that was fine.
 
-### Why this matters more than six checks
+### The fix
 
-This is the one operation in the tool that **moves a file's protection state**. A restore that refuses
-is the safe direction, and that is worth saying — the failure is loud and it denies, rather than
-silently lifting a lock. But the same code path is what a real restore would take, so "restore is
-broken on this machine" is a claim worth resolving rather than tolerating.
+- `Get-FileSha256` computes it with `[System.Security.Cryptography.SHA256]` over a `FileStream` — the
+  framework hasher, which does not depend on which cmdlets are loaded. **One helper, both call sites.**
+- **The order changed in the writer.** The hash is computed and checked *before* the key is fetched, so a
+  failure there leaves nothing half-done. If the hash cannot be computed, **nothing is changed** and the
+  refusal says so. This is the same rule the file already stated about the journal — an act that cannot
+  be undone must not be performed — applied one step earlier.
+- **The refusal names the missing field**, and distinguishes signature from backup hash.
+- The restore path gained its own explicit case for "the backup exists but could not be hashed".
 
-It also explains an observation from an earlier session that was recorded as unexplained: one run of
-the suite reported `2 of 473 checks FAILED` and could not be reproduced. State that carries across runs
-is exactly how a failure count changes between runs.
+### Verified
 
-### Where to look next
+```
+isolate -> restore round trip:  ok: true   "the DENY entry is gone and the original ACL is back"
+npm test:                       all 488 checks passed   (was 6 of 473 FAILED)
+```
 
-1. Print `$Spec` **inside** `Test-Journal`, immediately before the guard. That distinguishes the two
-   readings in one run and costs one edit.
-2. Check whether `Get-Content | ConvertFrom-Json` can yield `$null` or a bodyless object for a file
-   that exists and reads as valid JSON with `hmac` in it — a BOM was already a bug here once
-   (`readJsonLoose` exists because of it).
-3. Confirm both halves resolve the **same** journal directory. `isolate` writes to
-   `$JournalDir` and restore is handed a path; if those ever disagree, this is the error you would see,
-   and it is the same class of bug as the spawned-recovery directory mismatch found in the same
-   session.
+Two checks added for the distinction specifically: an unsigned journal is refused **and** the refusal
+names the signature, and a signed journal missing only its backup hash is refused **and** named that
+way. The second one is the case that actually occurred.
+
+### What made this take a while
+
+The guard's message pointed at the signature, and the same run's other assertion printed a field list
+that **contained** `hmac`. Both readings were true; they were readings of different things. What ended
+it was printing `$Spec` **inside the guard** rather than comparing JSON in the test: one instrumented
+run showed `hmac=String` and `backupSha256=NULL` side by side, and the answer was in that line.
+
+Worth keeping: a missing cmdlet quietly becoming `$null` is the same class of defect this tool exists to
+remove. `SilentlyContinue` is right for most of this script and wrong for anything whose absence makes
+an undo impossible.

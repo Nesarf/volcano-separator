@@ -1707,7 +1707,23 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     const { hmac, ...unsigned } = spec
     writeFileSync(applied.journalFile, JSON.stringify(unsigned, null, 2))
     const noSig = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
-    ok('an unsigned journal is refused', noSig.ok === false && /no signature/.test(noSig.detail), noSig.detail)
+    // The refusal must name what is actually missing. It used to say "no signature" for both a missing
+    // signature and a missing backup hash, and the journal that triggered this in the wild had a valid
+    // signature with a null hash -- so the wording sent the reader to the wrong field.
+    ok('an unsigned journal is refused and the refusal names the signature',
+      noSig.ok === false && /missing its signature/.test(noSig.detail), noSig.detail)
+    ok('and it does not blame the backup hash, which was present',
+      !/backup hash/.test(noSig.detail), noSig.detail)
+
+    // The other half of the same distinction, and the one that actually happened: a signed journal
+    // whose backup hash is missing. This is what the writer produced when Get-FileHash was absent.
+    const { backupSha256, ...noHash } = spec
+    writeFileSync(applied.journalFile, JSON.stringify(noHash, null, 2))
+    const noHashBackup = await enf.restoreIsolation(ctx, { journal: applied.journalFile })
+    ok('a journal missing only its backup hash is refused, and named that way',
+      noHashBackup.ok === false && /missing its backup hash/.test(noHashBackup.detail), noHashBackup.detail)
+    ok('and that refusal does not say "no signature"',
+      !/no signature/.test(noHashBackup.detail), noHashBackup.detail)
 
     // Put the good journal back, and prove the lock can still be lifted.
     writeFileSync(applied.journalFile, JSON.stringify(spec, null, 2))

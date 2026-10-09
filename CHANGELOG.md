@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Isolation restore refused every journal this tool wrote, and the cause was a cmdlet that does not
+  exist here.** `npm test` was **6 of 473 FAILED on a clean `c662dd3`**, all isolate-section, all reading
+  `refused to restore: this journal carries no signature`.
+  - **`Get-FileHash` is not available on this host** — `Get-Command Get-FileHash` returns nothing,
+    because it lives in `Microsoft.PowerShell.Utility` and its presence cannot be assumed. Under this
+    script's `$ErrorActionPreference = 'SilentlyContinue'` a missing cmdlet became a missing value with
+    nothing said, and `(Get-FileHash ...).Hash` evaluated to `$null`.
+  - **The writer proceeded anyway.** The journal went out with `"backupSha256": null` beside a valid
+    `hmac`, and the ACL was denied. An act that cannot be undone had been performed, and the restore
+    guard then refused to undo it — the safe direction, and the wrong place.
+  - **The refusal named the wrong field.** One guard covered both conditions and always said "no
+    signature", while the journal that triggered it had a perfectly good signature and a null backup
+    hash. That wording is what made this take an investigation: the message and the evidence disagreed
+    because they were about different things.
+  - Fixed with `Get-FileSha256`, which hashes through `[System.Security.Cryptography.SHA256]` over a
+    `FileStream` and so does not depend on which cmdlets are loaded; **one helper for both call sites**.
+    The hash is now computed and checked *before* the key is fetched, so a failure there changes nothing.
+    The refusal names the missing field, and the restore path has its own case for "exists but could not
+    be hashed".
+  - Verified: the round trip returns `the DENY entry is gone and the original ACL is back`, and
+    **488 checks pass**. Two checks added for the distinction itself — an unsigned journal is refused and
+    named as such, and a journal missing only its backup hash is refused and named that way.
+
 ### Changed
 
 - **`volcano_heal` no longer blocks, and `volcano_heal_status` follows it.** Heal is two things wearing

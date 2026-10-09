@@ -95,12 +95,40 @@ function Get-JournalCanonical {
     return @('v1', $Id, $Path, $BackupFile, $BackupSha, $DenySpec) -join $sep
 }
 
+# The backup's hash, computed without Get-FileHash.
+#
+# `Get-FileHash` lives in Microsoft.PowerShell.Utility and its presence cannot be assumed: measured on
+# this machine `Get-Command Get-FileHash` returns nothing. That single fact produced a journal written
+# with `backupSha256: null` next to a valid signature, and then a restore that refused with a message
+# blaming the signature. Both call sites now use the framework hasher, which does not depend on which
+# cmdlets happen to be loaded.
+function Get-FileSha256 {
+    param([string]$LiteralPath)
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($LiteralPath)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = $sha.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($bytes) -replace '-', '')
+    } catch {
+        return $null
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
 function Test-Journal {
     param([string]$Dir, [object]$Spec)
     $key = Get-JournalKey -Dir $Dir
     if (-not $key.ok) { return @{ ok = $false; why = $key.detail } }
     if (-not $Spec.hmac -or -not $Spec.backupSha256) {
-        return @{ ok = $false; why = 'this journal carries no signature, so this tool cannot vouch for it' }
+        # Naming the field matters. This message said "no signature" for both cases, and the journal
+        # that triggered it had a perfectly good signature with a null backup hash -- so the wording
+        # pointed at the signature while the hash was the one that was absent.
+        $missing = @()
+        if (-not $Spec.hmac) { $missing += 'signature' }
+        if (-not $Spec.backupSha256) { $missing += 'backup hash' }
+        return @{ ok = $false; why = 'this journal is missing its ' + ($missing -join ' and ') + ', so this tool cannot vouch for it' }
     }
     $canon = Get-JournalCanonical -Id ([string]$Spec.id) -Path ([string]$Spec.path) -BackupFile ([string]$Spec.backupFile) -BackupSha ([string]$Spec.backupSha256) -DenySpec ([string]$Spec.denySpec)
     $expect = Get-JournalMac -Key $key.key -Canonical $canon
@@ -109,7 +137,10 @@ function Test-Journal {
     }
     $backup = [string]$Spec.backupFile
     if (-not (Test-Path $backup)) { return @{ ok = $false; why = "the ACL backup is missing: $backup" } }
-    $actual = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
+    $actual = Get-FileSha256 -LiteralPath $backup
+    if (-not $actual) {
+        return @{ ok = $false; why = 'the ACL backup exists but could not be hashed, so there is nothing to compare it with' }
+    }
     if ($actual -ne ([string]$Spec.backupSha256).ToUpperInvariant()) {
         return @{ ok = $false; why = 'the ACL backup does not match the hash this tool recorded for it' }
     }
@@ -316,12 +347,22 @@ $denyDir = [System.IO.Path]::GetDirectoryName($resolved)
 $restoreCommand = "icacls `"$denyDir`" /restore `"$backup`""
 # Signed before it is written. The backup's hash goes into the signed payload too: signing only the
 # journal would leave the ACL file itself swappable, which is the same attack one step over.
+# Hashed and checked BEFORE the key is fetched, so that a failure here leaves nothing half-done.
+$backupSha = Get-FileSha256 -LiteralPath $backup
+if (-not $backupSha) {
+    # This used to proceed: the journal was written with a null hash and the ACL was denied anyway,
+    # leaving an act that the restore guard would later refuse to undo. Refusing later is the safe
+    # direction and still the wrong place -- an act that cannot be undone must not be performed, which
+    # is what this file's own comment says about the journal two paragraphs above.
+    Write-Output (@{ ok = $false; path = $resolved; detail = "could not hash the ACL backup, so nothing was changed: the journal would not be verifiable" } | ConvertTo-Json -Compress)
+    exit 1
+}
+
 $key = Get-JournalKey -Dir $JournalDir
 if (-not $key.ok) {
     Write-Output (@{ ok = $false; path = $resolved; detail = "$($key.detail); nothing was changed, because a journal this tool cannot vouch for is one it must not act on later" } | ConvertTo-Json -Compress)
     exit 1
 }
-$backupSha = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
 $canon = Get-JournalCanonical -Id $id -Path $resolved -BackupFile $backup -BackupSha $backupSha -DenySpec $DENY_SPEC
 $mac = Get-JournalMac -Key $key.key -Canonical $canon
 
