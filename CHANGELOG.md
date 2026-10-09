@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Changed
+
+- **The promotion-gate report now distinguishes "measured zero" from "cannot be measured", and names
+  the chain between them.** Three of the four requirements are unmet, and the report invited the wrong
+  response to all three: one reading "not collected" looks like a chore somebody has not got to. There
+  is no chore.
+
+  | requirement | mark | |
+  |---|---|---|
+  | `fired` | `[no] 0` | **measured** -- the count is real and it is zero |
+  | `human` | `[--] not measurable yet` | no code path asks a human |
+  | `quiet` | `[--] not measurable yet` | nothing is written to measure between |
+  | `undo` | `[ok] 46` | measured from the record, with its arithmetic |
+
+  - **`human` is structurally unanswerable, not unstarted.** `ask` is computed in `decideSignals` as
+    `allowed ? 'allow' : severity === 'high' ? 'ask' : 'note'` -- nothing asks a human and nothing waits
+    for an answer. `readline` appears in this repository only in `mcp.mjs`, for the MCP transport. It
+    becomes answerable when an ask has a path to a person, which is the same change that would make the
+    gate matter.
+  - **`quiet` has nothing to sweep.** `recordDecisions` skips every verdict that is not an `ask`, and in
+    `observe` mode the ask verdict never becomes one, so **zero findings are written**. An empty record
+    is not evidence of a quiet machine; it is a record that was never asked to hold anything.
+  - **One `chain` field says all three wait on the first**, so nobody goes looking for wiring that is
+    not missing.
+  - **`exec-from-ephemeral` is not broken, and that was measured rather than assumed.** It looks for an
+    executable running from a scratch directory. Over five days: **25,544 process starts, 6,454 with an
+    absolute executable path, and zero of those under a scratch root.** A first pass counted 1,031
+    command lines *mentioning* a scratch location and nearly concluded the rule was dead -- those were
+    `bash.exe` and `node.exe` in `Program Files` carrying scratch paths as **arguments**, and "the
+    argument is in the scratch directory" is not "the executable ran from it". Counting with the rule's
+    own extractor is what settled it.
+
 ### Added
 
 - **`evidence` now reports the state of all four promotion requirements, not one number.** The gate in

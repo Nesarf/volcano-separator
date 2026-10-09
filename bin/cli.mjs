@@ -935,9 +935,13 @@ async function main() {
       // requirement that is being met to anyone reading a summary.
       console.log(C.dim('  the four requirements before a rule may become automatic (DESIGN 4.2):'))
       for (const r of gate.requirements) {
-        const mark = r.state === 'not collected' || r.state === 'not swept' ? C.yellow('[--]')
+        // Three marks, not two. "A number that is too small" and "no number is obtainable" are
+        // different answers, and the report would otherwise render both as the same yellow square --
+        // which is how an unmeasurable requirement comes to look like one that merely measured no.
+        const mark = !r.measurable ? C.yellow('[--]')
           : r.measured > 0 ? C.green('[ok]') : C.yellow('[no]')
-        const value = r.measured === null ? '' : ` ${r.measured}`
+        const value = r.measurable === false ? C.dim('  (not measurable yet)')
+          : r.measured === null ? '' : ` ${r.measured}`
         console.log(`    ${mark} ${String(r.id).padEnd(7)}${value}`)
         console.log(C.dim(`        ${r.what}`))
         console.log(C.dim(`        ${r.detail}`))

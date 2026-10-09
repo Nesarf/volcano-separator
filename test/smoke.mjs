@@ -2308,6 +2308,70 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
 }
 
+// ── the promotion gate says which requirement is measured and which is not ──
+// A requirement nobody can measure must not render the same as one that measured zero, and a reader
+// must not be sent looking for wiring that does not exist.
+{
+  section('the promotion gate distinguishes unmeasurable from no')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  ok('the gate report is part of the surface', typeof g.promotionGate === 'function', typeof g.promotionGate)
+  const gate = g.promotionGate(ctx)
+
+  ok('all four requirements from DESIGN 4.2 are reported',
+    Array.isArray(gate.requirements) && gate.requirements.length === 4,
+    JSON.stringify((gate.requirements ?? []).map((r) => r.id)))
+  ok('and each is named in the design the same way',
+    gate.requirements.map((r) => r.id).join(',') === 'fired,human,quiet,undo',
+    gate.requirements.map((r) => r.id).join(','))
+
+  // Every requirement states whether a number is obtainable at all. Without this the report cannot
+  // tell "measured zero" from "cannot be measured", and those want different responses from a reader.
+  ok('every requirement says whether it is measurable',
+    gate.requirements.every((r) => typeof r.measurable === 'boolean'),
+    JSON.stringify(gate.requirements.map((r) => [r.id, r.measurable])))
+
+  // The two that are not, are not because of a missing chore. `ask` is a verdict computed in
+  // decideSignals and nothing waits on it; and no findings are written while the mode is observe, so
+  // there is no span between them to measure. Both were read from the code, not assumed.
+  {
+    const human = gate.requirements.find((r) => r.id === 'human')
+    const quiet = gate.requirements.find((r) => r.id === 'quiet')
+    ok('the human requirement is reported as unmeasurable rather than as not-yet-done',
+      human.measurable === false && /no code path asks a human/.test(human.detail), human.detail)
+    ok('and it says what would make it answerable',
+      /nothing waits on it/.test(human.detail), human.detail)
+    ok('the quiet requirement is unmeasurable for a stated reason',
+      quiet.measurable === false && /none are written/.test(quiet.detail), quiet.detail)
+    ok('and its reason is the observe mode, not laziness',
+      /observe/.test(quiet.detail), quiet.detail)
+  }
+
+  // The chain, so nobody goes hunting for wiring: all three wait on the first.
+  {
+    const fired = gate.requirements.find((r) => r.id === 'fired')
+    if (fired.measured === 0) {
+      ok('when nothing has fired, the report names the chain rather than the individual gaps',
+        typeof gate.chain === 'string' && /downstream of the first/.test(gate.chain), String(gate.chain))
+      ok('and the blocker is named as the firing requirement', gate.blocking === 'fired', String(gate.blocking))
+    } else {
+      ok('something has fired, so the chain note is absent', gate.chain === null, String(gate.chain))
+      ok('and nothing is named as blocking', gate.blocking === null, String(gate.blocking))
+    }
+  }
+
+  // The undo requirement is the one that turned out to be satisfied, and it is measured from the record
+  // rather than asserted -- so it must carry the arithmetic that produced it.
+  {
+    const undo = gate.requirements.find((r) => r.id === 'undo')
+    ok('the undo requirement reports its arithmetic',
+      /applied/.test(undo.detail) && /restored/.test(undo.detail), undo.detail)
+    ok('and admits when the record is incomplete rather than rounding up',
+      undo.measured === null || undo.measurable === true, JSON.stringify({ m: undo.measured, ok: undo.measurable }))
+  }
+}
+
 // ── the repair sequence belongs to one service, and says so ──
 {
   section('a repair sequence is declared, not assumed')
