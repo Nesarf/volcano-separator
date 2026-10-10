@@ -15,3 +15,15 @@ Thumbs.db
 
 # Local test samples -- never committed
 samples/
+
+# The handover document is local only, by decision on 2026-10-11.
+#
+# It is written for the next session in a different workspace: current state, what is left, the
+# constraints, and the traps that cost the most time. It includes host-specific paths and notes about
+# which session did what, so it stays on this machine. Everything it states as a fact is also in the
+# committed documents (README, TODO, DESIGN-enforcement, RULES, CHANGELOG) -- this file is the guided
+# path through them, not the only copy of anything.
+#
+# The file itself also says so at the top, because someone will eventually find it and wonder whether
+# it should be committed.
+HANDOVER.md

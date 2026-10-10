@@ -6,9 +6,28 @@ about, not a plan.
 
 ---
 
-## Volcano Separator must not be built for one LLM only
+## Volcano Separator must not be built for one LLM only — DONE
 
-**Added:** 2026-10-06 · **Status:** not started · **Scope:** large (touches the whole supervisor layer)
+**Added:** 2026-10-06 · **Status:** done, verified 2026-10-11 · **Scope:** large (touched the whole supervisor layer)
+
+### What was built, and what settled it
+
+The seven coupling faces listed below were collected from a measurement and generalised into a
+**service descriptor** (`lib/service.mjs`): a service is now a value a caller reads, disagrees with or
+replaces, rather than a fact about this repository. Two descriptors exist — Hindsight and the DSH host —
+and the second is what proved the shape carried: `resolveContext` derives `serviceId`, `serviceLabel`,
+`serviceDescriptor`, `dataDir`, `runtimeModule` and `profile` from it, with **no literal `~/.hindsight`
+left anywhere**.
+
+The part that was easy to miss, and which the second descriptor exposed: **the operations were not
+general even though the descriptor was.** `warm`, `serve` and `heal` are one service's sequence — a uvx
+build, a daemon start and a watch — and the DSH descriptor's own comment claimed *"the CLI refuses them
+for this service"* while the CLI ran all three for whatever it was pointed at. **A comment describing an
+intention is not an implementation.** The judgement is now declared on the descriptor that has a
+sequence (`recovery: { verbs, why }`), so a third service can declare one without the refusal code
+moving, and the CLI refuses as a distinct outcome (exit 3) rather than as a failure or a success.
+
+### The original statement, for the record
 
 ### The intent
 
@@ -98,7 +117,16 @@ can read, disagree with, and replace.
 
 ## The tool must gain real enforcement capability (nothing forbids it; the wiring is missing)
 
-**Added:** 2026-10-06 · **Status:** not started · **Scope:** the decision and action layers
+**Added:** 2026-10-06 · **Status:** BLOCKED on the promotion gate in DESIGN 4.2 · **Scope:** the decision and action layers
+
+> **2026-10-11 — this is the only item left, and it is not blocked on code.**
+> The gate has four requirements and three are unmet. All three wait on the first: no `ask` has ever
+> fired on real traffic, because `exec-from-ephemeral` is looking for an executable that runs from a
+> scratch directory and **over five days and 25,544 process starts, none of the 6,454 with an absolute
+> executable path did**. The other two are not missing chores either — `human` is *structurally*
+> unanswerable until an ask has a path to a person (`ask` is a computed verdict and nothing waits on
+> it), and `quiet` has nothing to measure between because `recordDecisions` writes nothing while the
+> mode is `observe`. See `promotionGate` in `lib/signals.mjs` for the measurements.
 
 ### Framing: this is not a permission problem
 
@@ -213,7 +241,7 @@ a small change, not a reason to keep deferring it.
 
 ---
 
-## One detector rule has never had any input, and the gate's sample is measured at 3
+## One detector rule has never had any input, and the gate's sample is measured at 3 — ANSWERED
 
 **Added:** 2026-10-06, **answered in the same pass** · **Scope:** small · **Outcome:** see below
 
