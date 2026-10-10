@@ -2321,6 +2321,84 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
 }
 
+// ── one identity, every surface's answer ──
+// The surfaces could always be asked one at a time; what was missing was asking about one thing and
+// getting every answer together. That is all the osquery idea reduced to what this tool needs.
+{
+  section('entities correlate the surfaces')
+  const g = await import('../lib/core.mjs')
+  const ctx = g.resolveContext({})
+
+  ok('the entity surface exists', typeof g.entity === 'function' && typeof g.entityByPid === 'function' &&
+    typeof g.entityByPath === 'function', typeof g.entity)
+  ok('and the kinds are named rather than guessed', Array.isArray(g.ENTITY_KINDS) && g.ENTITY_KINDS.includes('pid') &&
+    g.ENTITY_KINDS.includes('path'), JSON.stringify(g.ENTITY_KINDS))
+
+  // A pid that is certainly gone must be reported as gone, not as an empty answer. "Nothing known" and
+  // "not there" are different, and this project has paid for conflating them more than once.
+  {
+    const gone = await g.entityByPid(ctx, 999999)
+    ok('a pid that does not exist is answered, not errored', gone.ok === true, String(gone.detail))
+    ok('and reports that it is not running', gone.snapshot.some((s) => s.surface === 'ps' && s.value === null),
+      JSON.stringify(gone.snapshot.map((s) => [s.surface, s.value === null ? 'null' : 'value'])))
+    ok('and still lists what it cannot answer', Array.isArray(gone.cannot) && gone.cannot.length > 0,
+      JSON.stringify(gone.cannot))
+  }
+
+  {
+    const me = await g.entityByPid(ctx, process.pid)
+    ok('a live pid is found with its name', me.snapshot.some((s) => s.surface === 'ps' && s.value?.name),
+      JSON.stringify(me.snapshot.map((s) => s.value?.name ?? null)))
+    ok('and its executable path is resolved, which is the key a file can be joined by',
+      typeof me.identity.path === 'string' && me.identity.path.length > 3, String(me.identity.path))
+    ok('and that path is reported as existing or not, rather than assumed',
+      typeof me.identity.pathExists === 'boolean', String(me.identity.pathExists))
+    ok('and events carry their timestamps, because a pid number is reused',
+      me.events.every((e) => 't' in e), JSON.stringify(me.events.slice(0, 1)))
+  }
+
+  // The one answer an undo needs. `vault` moves a file and `isolate` denies access to one; both are
+  // safe only if nothing is running from it, and neither could ask.
+  {
+    const here = await g.entityByPath(ctx, process.cwd())
+    ok('a path that exists is reported as existing', here.snapshot.some((s) => s.surface === 'filesystem' && s.value?.exists === true),
+      JSON.stringify(here.snapshot[0]))
+    ok('and the in-use answer is derived rather than asked of the caller', typeof here.inUse === 'boolean', String(here.inUse))
+    ok('and it says why, whichever way it went', typeof here.inUseWhy === 'string' && here.inUseWhy.length > 10, here.inUseWhy)
+    ok('and it states that a command line is not a handle table',
+      here.cannot.some((c) => /handle/.test(c)), JSON.stringify(here.cannot))
+
+    const nothing = await g.entityByPath(ctx, 'E:\no-such-place-' + Date.now())
+    ok('a path nothing names is reported as not in use', nothing.inUse === false, nothing.inUseWhy)
+  }
+
+  // An unknown kind is refused with the list, rather than answered with nothing.
+  {
+    const bad = await g.entity(ctx, 'socket', 'x')
+    ok('an unknown entity kind is refused and the refusal lists what exists',
+      bad.ok === false && /no entity kind/.test(bad.detail) && /have:/.test(bad.detail), bad.detail)
+  }
+
+  // The process source must not be the stack-scoped reader. `liveProcesses` queries four executable
+  // names and filters command lines to this tool's chain, so asking it about an arbitrary pid returns
+  // nothing -- and nothing would have read as "not running", which is the failure this removes.
+  {
+    const src = readFileSync(join(projectDir, 'lib', 'entity.mjs'), 'utf8')
+    // Assert the IMPORT, not the absence of a word. A mention in a comment explaining why it is the
+    // wrong source is not a use of it -- and a check that fails on the explanation is a check that
+    // punishes documenting the reason, which is the same text-matching mistake this suite just had to
+    // fix in its own import lint.
+    ok('the entity layer does not import the stack-scoped process reader',
+      !/^import \{[^}]*\} from '\.\/live\.mjs'/m.test(src) && !/liveProcesses\s*\(/.test(src.replace(/\/\*[\s\S]*?\*\//g, ' ')),
+      'entity.mjs imports or calls the narrow process list')
+    ok('and says why in the code, so nobody switches back to it',
+      /not the right source here/.test(src), 'the reason is not recorded')
+    // And that the wide readers it does use are the ones it says they are.
+    ok('and it queries the whole process table rather than a filtered set',
+      /Win32_Process -Filter "CommandLine LIKE/.test(src), 'the path join does not sweep all processes')
+  }
+}
+
 // ── rules are data, so "which rule is silent" is answerable ──
 // A total cannot answer it. A rule waiting for something rare and a rule that cannot fire at all both
 // read as zero, and those want different responses: patience versus a bug hunt.

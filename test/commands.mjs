@@ -63,6 +63,8 @@ const COMMANDS = [
   ['warm (unknown service)', { args: ['warm', '--service', 'no-such-service'], want: [1] }],
   // And the service that does declare a sequence still works.
   ['warm (own service)', { args: ['warm'], want: [0] }],
+  ['entity (bad kind)', { args: ['entity', 'socket', 'x'], want: [2] }],
+  ['entity (pid)', { args: ['entity', 'pid', String(process.pid)], want: [0] }],
   ['chamber (gone pid)', { args: ['chamber', '999999'], want: [0] }],
   ['timeline', { args: ['timeline'], want: [0] }],
   ['service', { args: ['service'], want: [0] }],

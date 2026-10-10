@@ -4,6 +4,32 @@
 
 ### Added
 
+- **`entity <pid|path>` / `volcano_entity`: one identity, every surface's answer, together.** The
+  surfaces could always be asked one at a time; what was missing was asking about one *thing* and
+  getting every answer at once. This is the osquery idea reduced to what this tool actually needs —
+  **no query language, no flat table, and no new dependency.**
+  - Ask about a **pid**: whether it is running, what it is running from, resource use if it is among the
+    largest, and every event the record holds for that pid number **with its timestamps** — because a
+    pid is reused, and conflating two processes that held one number is a mistake already found once in
+    the chamber.
+  - Ask about a **path**: whether it exists, and **which running processes name it**. That second answer
+    is the one an undo needs: `vault` moves a file and `isolate` denies access to one, and both are safe
+    only if nothing is running from it. Neither could previously ask, so the answer was "probably
+    nothing".
+  - **Events and snapshots are deliberately not merged.** `activity` records events, which have a time
+    and happened once; `ps` and `redline` are snapshots, true when taken and silent about a minute ago.
+    One table would let "happened at 14:02" be read as "is true".
+  - **Every answer states what it cannot tell you**, as a field rather than a footnote: a command line
+    is not a handle table, so a process holding a file open without naming it is not found; and whether
+    a process is harmful is a question about behaviour over time, not about state.
+  - **One narrowing caught before it became a silent lie.** The obvious process source was
+    `liveProcesses`, which queries four executable names and filters command lines to this tool's own
+    chain. Asking it about an arbitrary pid returns nothing — and nothing would have read as "not
+    running". The entity layer now does a point lookup for a pid and a full `Win32_Process` sweep for a
+    path, and the code records why the narrow reader is the wrong source so nobody switches back.
+
+### Changed
+
 - **The detection rules are a table (`lib/rules.mjs`) with a readable copy (`RULES.md`), and the gate
   now reports them one by one.** The gate could previously say "no ask has fired" and nothing more,
   because the only record was a total — and a total cannot answer the question that matters when

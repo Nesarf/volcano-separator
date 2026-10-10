@@ -159,6 +159,8 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
+  entity <pid|path> <value>
+                     everything known about one process or one file, from every surface at once
   --service <id>     which service descriptor applies (hindsight, dsh)
   --no-activity      install-service: skip the system-wide activity recorder
   --dry-run          for install-service: print what would happen
@@ -906,6 +908,49 @@ async function main() {
       console.log(`  custody window  ${r.custody ? 'open -- it belongs to us, the target cannot close it' : 'not opened'}`)
       console.log('')
       console.log(C.dim('  the window offers ALLOW (records your decision) or RELEASE (just resumes it)'))
+      break
+    }
+
+    case 'entity': {
+      // One identity, every surface's answer, together. The alternative was five commands and a join
+      // done in the reader's head -- which is what the surfaces required before this existed.
+      const kind = String(opts._[1] ?? '').toLowerCase()
+      const id = opts._[2] ?? ''
+      const r = await g.entity(ctx, kind, kind === 'pid' ? Number(id) : id)
+      if (opts.json) return emit(r)
+      if (!r.ok) { console.log(C.red('FAIL') + ': ' + r.detail); process.exit(2) }
+
+      console.log(`entity -- ${r.kind} ${r.id}`)
+      console.log('')
+      if (r.kind === 'pid') console.log(`  ${'running'.padEnd(12)} ${r.snapshot[0]?.value ? r.snapshot[0].value.name + '  (pid ' + r.id + ')' : 'no'}`)
+      if (r.kind === 'pid') console.log(`  ${'from'.padEnd(12)} ${r.identity.path ?? C.dim('(executable path not parseable)')}`)
+      if (r.kind === 'path') {
+        // The one answer an undo actually needs.
+        console.log(`  ${'exists'.padEnd(12)} ${r.snapshot[0]?.value?.exists}`)
+        console.log(`  ${'in use'.padEnd(12)} ` + (r.inUse ? C.yellow('yes') + C.dim(' -- ' + r.inUseWhy) : C.green('no') + C.dim(' -- ' + r.inUseWhy)))
+      }
+      console.log('')
+      console.log(C.dim('  --- snapshot (true now) ---'))
+      for (const s2 of r.snapshot) {
+        const v = s2.value
+        if (Array.isArray(v)) { console.log(`    ${s2.surface}  ${s2.what}: ${v.length}`); for (const x of v.slice(0, 5)) console.log(C.dim('      ' + JSON.stringify(x).slice(0, 100))) }
+        else console.log(`    ${s2.surface}  ${s2.what}: ${JSON.stringify(v).slice(0, 110)}`)
+      }
+      console.log('')
+      console.log(C.dim(`  --- events (happened, ${r.events.length}) ---`))
+      for (const e of r.events.slice(-10)) {
+        console.log(C.dim(`    ${String(e.t ?? '').slice(0, 19)}  ${String(e.kind).padEnd(12)} ${String(e.action ?? e.detail ?? '').slice(0, 60)}`))
+      }
+      if (!r.events.length) console.log(C.dim('    none'))
+      console.log('')
+      // What this cannot answer, printed rather than left to be assumed.
+      console.log(C.dim('  --- cannot answer ---'))
+      for (const c of r.cannot) console.log(C.dim('    ' + c))
+      if (r.unknown?.length) {
+        console.log('')
+        console.log(C.yellow('  --- could not be read ---'))
+        for (const u of r.unknown) console.log(C.yellow(`    ${u.surface}: ${u.why}`))
+      }
       break
     }
 

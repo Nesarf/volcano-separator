@@ -131,7 +131,7 @@ Options: `--profile <name>` (default `coding-agent`), `--port <n>` (default `907
 |---|---|---|
 | CLI | `bin/cli.mjs` | humans, scripts, the scheduled task |
 | Library | `lib/core.mjs` | other tools (pure Node, zero dependencies) |
-| MCP | `lib/mcp.mjs` | any harness — 16 tools, listed below |
+| MCP | `lib/mcp.mjs` | any harness — 17 tools, listed below |
 
 The MCP surface is **read-only apart from `heal`**, and that is the design rather than a stage of
 completion.
@@ -145,6 +145,7 @@ completion.
 | custody | `volcano_detained` `volcano_timeline` `volcano_isolated` |
 | cache | `volcano_cache_plan` |
 | repair | `volcano_heal_status` |
+| correlate | `volcano_entity` |
 
 `volcano_heal` is the one that starts something: it repairs a service the agent is usually the
 reason for needing, removes nothing, and the worst outcome is a slower path to the same place.
@@ -307,6 +308,13 @@ Two things worth knowing that the shape does not show:
 
 `chamber` sits where it does because it composes two sources that must not be confused: live facts
 from a probe, and per-pid history from the record. It reads `custody` for the second.
+
+`entity` sits near the bottom because it reads several surfaces at once: it is the one module that
+answers about a *thing* — a pid or a path — instead of about a surface. **Events and snapshots are kept
+apart there on purpose.** `activity` is a record of events, which have a time and happened once; `ps`
+and `redline` are snapshots, true when taken and silent about a minute ago. Flattening them into one
+table would let "happened at 14:02" be read as "is true", and this tool exists to remove that kind of
+answer rather than produce it.
 
 ## Configuration
 
