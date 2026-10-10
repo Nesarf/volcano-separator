@@ -1450,7 +1450,20 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // Then member accesses, so parts.join(' | ') is not read as node:path's join.
   const DOT_MEMBER = new RegExp('[' + String.fromCharCode(46) + '][' + String.fromCharCode(92) + 's]*[A-Za-z_$][A-Za-z0-9_$]*', 'g')
   const NON_WORD = new RegExp('[^A-Za-z0-9_$]+')
-  const bareNames = (src) => new Set(CODE(src).replace(DOT_MEMBER, ' ').split(NON_WORD))
+  // An object literal's property KEY is not a reference to a value.
+  //
+  // `add({ rule: 'exec-from-ephemeral', ... })` has a key called `rule`, and this check counted it as a
+  // use of an imported symbol named `rule` -- which is not in scope and never was, because the string
+  // the key points at is not an identifier at all. Every object literal with a key matching a module's
+  // export produced a false offender, and two different linters here agreed on it, which is how a false
+  // positive gets believed.
+  //
+  // Keys are dropped before tokenising. The preceding character is excluded from being a dot, so member
+  // access (`f.rule`) is still counted -- that one really does read a value. A shorthand property
+  // (`{ rule }`) has no colon and is unaffected, because that form genuinely reads the binding.
+  const PROP_KEY = new RegExp('(^|[^A-Za-z0-9_$])[A-Za-z_$][A-Za-z0-9_$]*[ ]*:', 'g')
+  const bareNames = (src) =>
+    new Set(CODE(src).replace(PROP_KEY, ' ').replace(DOT_MEMBER, ' ').split(NON_WORD))
 
   const sources = {}
   for (const f of files) sources[f] = readFileSync(join(dir, f), 'utf8')
@@ -2306,6 +2319,95 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // The window a caller opens is this tool's, and the script for it is found rather than assumed.
   ok('the chamber reports whether its own window host is present',
     typeof ch.chamberAvailable() === 'boolean', String(ch.chamberAvailable()))
+}
+
+// ── rules are data, so "which rule is silent" is answerable ──
+// A total cannot answer it. A rule waiting for something rare and a rule that cannot fire at all both
+// read as zero, and those want different responses: patience versus a bug hunt.
+{
+  section('detection rules are a table')
+  const g = await import('../lib/core.mjs')
+  const rules = await import('../lib/rules.mjs')
+  const ctx = g.resolveContext({})
+
+  ok('the rule table is part of the surface', typeof g.RULES === 'object' && typeof rules.RULES === 'object',
+    typeof rules.RULES)
+  ok('there are rules in it', rules.RULE_IDS.length > 0, rules.RULE_IDS.join(', '))
+
+  // Every rule carries the fields the report needs. A rule missing `needs` cannot be told apart from
+  // one whose condition is unknown, which is the failure this table exists to prevent.
+  {
+    const missing = []
+    for (const id of rules.RULE_IDS) {
+      const r = rules.RULES[id]
+      for (const f of ['severity', 'detects', 'intent', 'detectsWhy', 'needs', 'calibrated']) {
+        if (r[f] === undefined || r[f] === null || r[f] === '') missing.push(`${id}.${f}`)
+      }
+    }
+    ok('every rule states severity, what it detects, its intent, its condition, its need, and whether it is calibrated',
+      missing.length === 0, missing.join(', '))
+    ok('every severity is one the decision layer understands',
+      rules.RULE_IDS.every((id) => ['high', 'low'].includes(rules.RULES[id].severity)),
+      rules.RULE_IDS.map((id) => `${id}=${rules.RULES[id].severity}`).join(' '))
+  }
+
+  // The doc and the table must agree, in both directions. Two lists of the same thing drift, and the
+  // direction is always the same: the code gains a rule and the document does not.
+  {
+    const doc = rules.rulesDocText()
+    ok('RULES.md is readable', typeof doc === 'string' && doc.length > 100, String(doc).slice(0, 40))
+    const undocumented = rules.RULE_IDS.filter((id) => !doc.includes('`' + id + '`'))
+    ok('every rule in the table has a section in RULES.md', undocumented.length === 0, undocumented.join(', '))
+    // And the other way: a heading in the doc that matches no rule.
+    const headings = [...doc.matchAll(/^## `([a-z-]+)`/gm)].map((m) => m[1])
+    const orphans = headings.filter((h) => !rules.RULE_IDS.includes(h))
+    ok('and RULES.md names no rule the table does not have', orphans.length === 0, orphans.join(', '))
+    ok('the doc states that the conditions are prose rather than data, so nobody assumes an expression language',
+      /deliberately not data/.test(doc), 'the reason is not stated')
+  }
+
+  // Asking for a rule that does not exist is refused rather than answered with undefined, because an
+  // undefined rule would travel on to become a finding filed under nothing.
+  {
+    const hit = rules.rule(rules.RULE_IDS[0])
+    ok('an existing rule resolves', hit.ok === true && hit.severity === rules.RULES[rules.RULE_IDS[0]].severity,
+      JSON.stringify({ ok: hit.ok, severity: hit.severity }))
+    const miss = rules.rule('no-such-rule')
+    ok('an unknown rule is refused, and the refusal lists what exists',
+      miss.ok === false && /no detection rule named/.test(miss.detail) && /have:/.test(miss.detail),
+      miss.detail)
+  }
+
+  // The gate names the silent ones.
+  {
+    const gate = g.promotionGate(ctx)
+    ok('the gate reports every rule with its firing count',
+      Array.isArray(gate.rules) && gate.rules.length === rules.RULE_IDS.length,
+      JSON.stringify((gate.rules ?? []).map((r) => [r.id, r.fired])))
+    ok('and lists the silent ones by name',
+      Array.isArray(gate.silentRules) && gate.silentRules.every((id) => rules.RULE_IDS.includes(id)),
+      JSON.stringify(gate.silentRules))
+    ok('silent and fired partition the table exactly',
+      (gate.silentRules.length + gate.rules.filter((r) => r.fired > 0).length) === rules.RULE_IDS.length,
+      JSON.stringify({ silent: gate.silentRules.length, fired: gate.rules.filter((r) => r.fired > 0).length, total: rules.RULE_IDS.length }))
+    const firedDetail = gate.requirements.find((r) => r.id === 'fired').detail
+    if (gate.silentRules.length) {
+      ok('and the firing requirement says so rather than leaving it to be inferred from a zero',
+        /have never fired/.test(firedDetail) && firedDetail.includes(gate.silentRules[0]), firedDetail)
+    } else {
+      ok('with every rule firing, the detail says that instead', /every rule has fired/.test(firedDetail), firedDetail)
+    }
+  }
+
+  // A finding attributed to a rule outside the table must throw. It would otherwise be recorded, then
+  // counted, then reported as a rule that fired -- and "which rule fired" is the thing this table is for.
+  {
+    const src = readFileSync(join(projectDir, 'lib', 'signals.mjs'), 'utf8')
+    ok('signals.mjs reads severities from the table rather than repeating them',
+      !/severity: '(high|low)'/.test(src), 'a severity is hardcoded in signals.mjs')
+    ok('and refuses a finding whose rule is not in the table',
+      /finding attributed to an unknown rule/.test(src), 'nothing rejects a finding for an unknown rule')
+  }
 }
 
 // ── the promotion gate says which requirement is measured and which is not ──

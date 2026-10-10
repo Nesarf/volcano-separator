@@ -933,6 +933,18 @@ async function main() {
       // here. What can be reported is the state of each requirement -- and "not collected" is one of
       // the states, which matters because a requirement with no data source looks exactly like a
       // requirement that is being met to anyone reading a summary.
+      // Per rule, before the aggregate. When nothing has fired, "no ask" is not the useful answer --
+      // "which rule is silent" is, because a rule waiting for something rare and a rule that cannot fire
+      // both read as zero. Naming them is the reason the rules are a table rather than three literals.
+      console.log(C.dim('  detection rules, and what each has fired:'))
+      for (const r of gate.rules) {
+        const mark = r.fired > 0 ? C.green('[ok]') : C.yellow('[--]')
+        console.log(`    ${mark} ${String(r.id).padEnd(24)}${String(r.fired).padStart(6)}   ${r.severity}`)
+        console.log(C.dim(`        ${r.intent}`))
+        console.log(C.dim(`        needs: ${r.needs}`))
+      }
+      console.log('')
+
       console.log(C.dim('  the four requirements before a rule may become automatic (DESIGN 4.2):'))
       for (const r of gate.requirements) {
         // Three marks, not two. "A number that is too small" and "no number is obtainable" are

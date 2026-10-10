@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Added
+
+- **The detection rules are a table (`lib/rules.mjs`) with a readable copy (`RULES.md`), and the gate
+  now reports them one by one.** The gate could previously say "no ask has fired" and nothing more,
+  because the only record was a total — and a total cannot answer the question that matters when
+  nothing has fired: **which rule is silent?** A rule waiting for something rare and a rule that cannot
+  fire at all both read as zero.
+
+  ```
+  detection rules, and what each has fired:
+    [--] persist-from-ephemeral       0   high
+    [--] exec-from-ephemeral          0   low
+    [--] binary-vanished              0   high
+  ```
+
+  - Each rule carries `severity`, what it detects, its **intent**, its condition, **what has to be true
+    for it to be able to fire at all** (`needs`), and whether it is calibrated. None of the three is,
+    and `calibrated: false` says so per rule rather than leaving it to be inferred.
+  - **Evidence now records per-rule counts**, accumulated across the day the same way `actionable` is —
+    because one window is nearly always empty, and a daily record of zeroes is the same useless evidence
+    as a counter that cannot vary.
+  - **A finding attributed to a rule that is not in the table now throws** instead of being recorded. A
+    finding filed under `undefined` would be counted later, and reported, as a rule that fired — and
+    "which rule fired" is the one thing the table exists to answer.
+  - Severities are read from the table rather than repeated at each `add()` site, so a rule has one
+    severity in one place.
+  - **The detection conditions stayed in code and say so**, in `detectsWhy` and in `RULES.md`. Making
+    them loadable would mean an expression language, and an expression language that silently matches
+    nothing is a worse failure than a rule that has to be written in code — it is the same defect this
+    project keeps removing, one level up.
+  - The idea is borrowed deliberately and cheaply: YARA's contribution is not its scanner, it is that a
+    detection rule is a *thing with a name and a declared intent*, which can be listed, diffed and
+    explained. **Nothing here is a new dependency, and nothing is fetched.** No downloaded packs, no
+    feed, no signature bundle — a watchman that fetches executable rules is a watchman with a supply
+    chain, and that is a trade this tool has not made.
+
+### Fixed
+
+- **`every module imports the symbols it uses` was failing on a false positive, and had been for an
+  unknown length of time.** It counted an object literal's **property key** as a use of an imported
+  symbol: `add({ rule: '...' })` has a key called `rule`, and the check read that as a reference to a
+  symbol named `rule` that no module imports. Every `{ someExport: ... }` literal in the codebase
+  produced an offender.
+  - Two independent linters agreed on it, which is how a false positive gets believed; the tell was
+    that the reported file did not contain the token the report named.
+  - Keys are now dropped before tokenising, while member access (`f.rule`) is still counted — that one
+    really does read a value. Verified by planting a genuine use of an unimported symbol and confirming
+    the check still fails on it.
+
 ### Changed
 
 - **The promotion-gate report now distinguishes "measured zero" from "cannot be measured", and names
