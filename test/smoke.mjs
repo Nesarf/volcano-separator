@@ -2332,7 +2332,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   ok('the entity surface exists', typeof g.entity === 'function' && typeof g.entityByPid === 'function' &&
     typeof g.entityByPath === 'function', typeof g.entity)
   ok('and the kinds are named rather than guessed', Array.isArray(g.ENTITY_KINDS) && g.ENTITY_KINDS.includes('pid') &&
-    g.ENTITY_KINDS.includes('path'), JSON.stringify(g.ENTITY_KINDS))
+    g.ENTITY_KINDS.includes('path') && g.ENTITY_KINDS.includes('port'), JSON.stringify(g.ENTITY_KINDS))
 
   // A pid that is certainly gone must be reported as gone, not as an empty answer. "Nothing known" and
   // "not there" are different, and this project has paid for conflating them more than once.
@@ -2377,6 +2377,63 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     const bad = await g.entity(ctx, 'socket', 'x')
     ok('an unknown entity kind is refused and the refusal lists what exists',
       bad.ok === false && /no entity kind/.test(bad.detail) && /have:/.test(bad.detail), bad.detail)
+  }
+
+  // --- port, the third identity ------------------------------------------------------------------
+  //
+  // A port number is less of an identity than a pid: 5432 will belong to whatever binds it next, and a
+  // dead listener frees it in the same second. So these check the two things that make it useful
+  // anyway -- that it joins to pid and to path, and that it refuses to invent an owner when it is free.
+  ok('port is one of the named kinds', g.ENTITY_KINDS.includes('port'), JSON.stringify(g.ENTITY_KINDS))
+  ok('and it is exported as its own function', typeof g.entityByPort === 'function', typeof g.entityByPort)
+
+  {
+    // Out of range and non-numeric are refused rather than coerced. `Number('abc')` is NaN, and NaN
+    // would reach the lookup as a nonsense query whose empty answer would read as "nothing is listening".
+    for (const bad of [0, -1, 65536, 'abc', null, '']) {
+      const r = await g.entityByPort(ctx, bad)
+      ok(`a port of ${JSON.stringify(bad)} is refused rather than coerced`, r.ok === false, JSON.stringify(r))
+    }
+  }
+
+  {
+    // Nothing listening. Not inventing an owner is the point: a free port has no pid, and the answer
+    // has to say that rather than name something nearby.
+    const free = await g.entityByPort(ctx, 45789)
+    ok('a port with nothing on it is answered, not errored', free.ok === true, String(free.detail))
+    ok('and reports no listener rather than guessing one',
+      free.snapshot.some((s) => s.surface === 'net' && s.value === null),
+      JSON.stringify(free.snapshot))
+    ok('and says it is not in use, with a reason',
+      free.inUse === false && typeof free.inUseWhy === 'string', `${free.inUse} / ${free.inUseWhy}`)
+    ok('and names no pid to join to', free.identity.pid === null && free.identity.path === null,
+      JSON.stringify(free.identity))
+    ok('and lists the limits of the lookup rather than leaving them to be assumed',
+      Array.isArray(free.cannot) && free.cannot.some((c) => /UDP/.test(c)), JSON.stringify(free.cannot))
+  }
+
+  {
+    // A live listener, started here so the test owns the fact it asserts. `listen(0)` asks the OS for
+    // a free port, which removes the flake of guessing one.
+    const http = await import('node:http')
+    const srv = http.createServer((_q, s) => s.end('x'))
+    await new Promise((res, rej) => { srv.once('error', rej); srv.listen(0, '127.0.0.1', res) })
+    const port = srv.address().port
+    try {
+      const held = await g.entityByPort(ctx, port)
+      ok('a live listener is found', held.snapshot.some((s) => s.surface === 'net' && s.value?.pid),
+        JSON.stringify(held.snapshot))
+      ok('and it is in use, with a reason that names the holder',
+        held.inUse === true && held.inUseWhy.length > 10, held.inUseWhy)
+      ok('and the owner resolves to a pid, which is what makes a port worth asking about',
+        Number.isFinite(held.identity.pid) && held.identity.pid > 0, String(held.identity.pid))
+      ok('and it says the join was taken at a moment rather than being an identity',
+        /at this moment|right now/.test(held.identity.note), held.identity.note)
+      ok('and events carry their timestamps, because the binding moves',
+        held.events.every((e) => 't' in e), JSON.stringify(held.events.slice(0, 1)))
+    } finally {
+      await new Promise((res) => srv.close(res))
+    }
   }
 
   // The process source must not be the stack-scoped reader. `liveProcesses` queries four executable

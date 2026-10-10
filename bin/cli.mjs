@@ -159,8 +159,10 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
-  entity <pid|path> <value>
-                     everything known about one process or one file, from every surface at once
+  entity <pid|path|port> <value>
+                     everything known about one process, one file or one port, from every surface
+                     at once. A port resolves to the pid holding it now, which is the join back to
+                     the pid and path kinds -- taken at the moment of the query, since a binding moves.
   --service <id>     which service descriptor applies (hindsight, dsh)
   --no-activity      install-service: skip the system-wide activity recorder
   --dry-run          for install-service: print what would happen
@@ -916,7 +918,7 @@ async function main() {
       // done in the reader's head -- which is what the surfaces required before this existed.
       const kind = String(opts._[1] ?? '').toLowerCase()
       const id = opts._[2] ?? ''
-      const r = await g.entity(ctx, kind, kind === 'pid' ? Number(id) : id)
+      const r = await g.entity(ctx, kind, kind === 'pid' || kind === 'port' ? Number(id) : id)
       if (opts.json) return emit(r)
       if (!r.ok) { console.log(C.red('FAIL') + ': ' + r.detail); process.exit(2) }
 
@@ -928,6 +930,13 @@ async function main() {
         // The one answer an undo actually needs.
         console.log(`  ${'exists'.padEnd(12)} ${r.snapshot[0]?.value?.exists}`)
         console.log(`  ${'in use'.padEnd(12)} ` + (r.inUse ? C.yellow('yes') + C.dim(' -- ' + r.inUseWhy) : C.green('no') + C.dim(' -- ' + r.inUseWhy)))
+      }
+      if (r.kind === 'port') {
+        // The join is the whole value of asking, so it is the headline. Whether the port is busy is
+        // secondary to *who*, and that answer is explicitly a moment rather than an identity.
+        console.log(`  ${'listening'.padEnd(12)} ` + (r.inUse ? C.yellow('yes') + C.dim(' -- ' + r.inUseWhy) : C.green('no') + C.dim(' -- ' + r.inUseWhy)))
+        console.log(`  ${'owner pid'.padEnd(12)} ${r.identity.pid ?? C.dim('(none)')}`)
+        console.log(`  ${'from'.padEnd(12)} ${r.identity.path ?? C.dim('(no executable path for the owner)')}`)
       }
       console.log('')
       console.log(C.dim('  --- snapshot (true now) ---'))

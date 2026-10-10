@@ -65,6 +65,10 @@ const COMMANDS = [
   ['warm (own service)', { args: ['warm'], want: [0] }],
   ['entity (bad kind)', { args: ['entity', 'socket', 'x'], want: [2] }],
   ['entity (pid)', { args: ['entity', 'pid', String(process.pid)], want: [0] }],
+  // A port with nothing on it is still a valid question with an answer, so the exit code is 0
+  // rather than the refusal code -- 'nothing is listening' is a fact, not an error.
+  ['entity (port)', { args: ['entity', 'port', '45789'], want: [0] }],
+  ['entity (bad port)', { args: ['entity', 'port', '0'], want: [2] }],
   ['chamber (gone pid)', { args: ['chamber', '999999'], want: [0] }],
   ['timeline', { args: ['timeline'], want: [0] }],
   ['service', { args: ['service'], want: [0] }],
