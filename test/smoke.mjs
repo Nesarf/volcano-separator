@@ -2436,6 +2436,81 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     }
   }
 
+  // --- the pixel font, which nothing was checking ------------------------------------------------
+  //
+  // Two documents say this font has 62 glyphs; it has 59 distinct ones. No test looked at the file, so
+  // a wrong number stayed put. The assertions below are about structure rather than the count, because
+  // the count is the author's business and well-formedness is not.
+  {
+    const fontSrc = readFileSync(join(projectDir, 'bin', 'pixelfont.ps1'), 'utf8')
+    // A glyph entry is a quoted key, `=`, and one or two quoted hex runs joined by `+`. Entries are
+    // packed several to a line, separated by `;`.
+    //
+    // Parsing is by **splitting the line on `;`**, not by one clever pattern. Two attempts at the
+    // clever pattern failed in opposite directions: matching key and value separately paired each key
+    // with the *next* entry's hex on a shared line (reporting Q as 16 digits and then as missing), and
+    // anchoring the value with a lookahead skipped every entry whose neighbour was malformed. A
+    // splitter that cannot shift has no such failure mode, and a malformed value still surfaces instead
+    // of being quietly unmatched.
+    const ENTRY = /'([^']{1,2})'\s*=\s*'([0-9A-Fa-f]{2,})'(\s*\+\s*'([0-9A-Fa-f]+)')?/
+    const glyphs = new Map()
+    const glyphRaw = new Map()
+    const malformed = []
+    for (const line of fontSrc.split('\n')) {
+      for (const part of line.split(';')) {
+        const m = ENTRY.exec(part)
+        if (!m) continue
+        const ch = m[1]
+        const hex = m[2] + (m[4] ?? '')
+        glyphRaw.set(ch, hex)
+        if (hex.length !== 14) { malformed.push(`${ch}: ${hex.length} hex digits`); continue }
+        glyphs.set(ch, hex)
+      }
+    }
+    ok('the font table parses', glyphs.size > 40, `${glyphs.size} distinct glyph(s)`)
+    // Q is the one entry that is not fourteen digits, and it is a *known recorded* defect rather than
+    // an unknown one -- pinned by its literal at the end of this section. So the assertion is that no
+    // OTHER entry is malformed, which still catches a new typo while stating the exception.
+    ok('and every entry is a 5x7 glyph, fourteen hex digits, with Q the single known exception',
+      malformed.length <= 1 && malformed.every((x) => x.startsWith('Q:')),
+      malformed.slice(0, 4).join('; '))
+    // The Latin alphabet and the digits have to be complete: a panel that renders a wrong glyph reads
+    // as a font bug, and this font exists precisely because system text is antialiased.
+    const missing = []
+    for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') if (!glyphs.has(c)) missing.push(c)
+    ok('and it covers every letter and digit, with Q the known exception',
+      missing.length === 0 || (missing.length === 1 && missing[0] === 'Q'),
+      'missing: ' + missing.join(''))
+    // Every row mask has to fit the five columns. A value above 31 sets a bit the renderer's five-bit
+    // read never looks at, so the row comes out subtly wrong with nothing to say so.
+    const overflow = []
+    for (const [ch, hex] of glyphs) {
+      for (let r = 0; r < 7; r++) if (parseInt(hex.slice(r * 2, r * 2 + 2), 16) > 31) overflow.push(`${ch} row ${r}`)
+    }
+
+    // --- two defects in the data, recorded rather than repaired -------------------------------------
+    //
+    // Both were found by the checks above and then confirmed by printing the glyphs as text, which is
+    // what this font's own HOW TO CHECK section says to do. Neither is fixed here: both are the
+    // author's art, and each repair is a design choice rather than something derivable.
+    //
+    //   Q   '0E111111150E0201' is sixteen digits. The renderer reads Substring(r*2,2) for r in 0..6, so
+    //       the final pair ('01') is unreachable and the glyph as drawn is a Q with no tail below the
+    //       baseline. Repairing it means DELETING a digit, which changes the shape.
+    //
+    //   /   '01020408102000' gives row 5 the value 0x20 = 32. The five columns are bits 4..0, so 32 is
+    //       bit 5 -- a column that does not exist. The renderer masks five bits and drops it, so the
+    //       row draws empty. Repairing it means deciding whether the stroke continues.
+    //
+    // Asserted as *present*, so a change to either literal fails here and has to be looked at. A test
+    // that demanded they be fixed would be inventing a fix for someone else's drawing.
+    ok('the two known data defects are still exactly what was recorded, so a change is noticed',
+      glyphRaw.get('Q') === '0E111111150E0201' && glyphRaw.get('/') === '01020408102000',
+      `Q=${glyphRaw.get('Q')} /=${glyphRaw.get('/')}`)
+    ok('and the out-of-range row is the one recorded, and is still the only one',
+      overflow.length === 1 && overflow[0] === '/ row 5', overflow.slice(0, 4).join('; '))
+  }
+
   // The process source must not be the stack-scoped reader. `liveProcesses` queries four executable
   // names and filters command lines to this tool's chain, so asking it about an arbitrary pid returns
   // nothing -- and nothing would have read as "not running", which is the failure this removes.
