@@ -5,6 +5,13 @@
 **A Windows workstation supervisor: it keeps a service reachable, and it makes the machine say what
 it is doing.**
 
+**Every art asset and every piece of UI here is pixel art, window design included**, and this tool's
+pixel layer is **its own**: it borrows no font, icon or palette from a sibling project, because a
+watchdog whose value is that it depends on nothing cannot depend on one. That rule is shared by four
+tools and now lives in exactly one place — [`Nesarf/NTVI`](https://github.com/Nesarf/NTVI).
+How far this tool has actually got with it, **and the limit**, is in
+[`DESIGN-enforcement.md`](DESIGN-enforcement.md) §12.5.
+
 It started as one thing and grew into three, because the first job kept failing for reasons the
 second and third exist to explain.
 

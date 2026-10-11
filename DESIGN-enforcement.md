@@ -497,14 +497,21 @@ down rather than assumed: the temptation is obvious and it runs in the direction
 The temptation is concrete. `ichiwatashi` is a pixel-art tool, and this tool now draws pixel glyphs.
 Reaching for it would mean borrowing a font, an icon set or a palette from a project whose own notes
 say it is still calibrating its criteria — and that would couple a watchdog, whose value is that it
-depends on nothing, to a project mid-design. The notes state the rule for the sibling already:
-`§12.5` records that `ichiwatashi` is where art assets belong, and that this tool's `pixelfont.ps1`
-is **"enough and then stops"**.
+depends on nothing, to a project mid-design. **This tool's `pixelfont.ps1` is enough and then stops.**
+
+> **Correction (2026-10-12).** An earlier revision of this paragraph said `§12.5` "records that
+> `ichiwatashi` is where art assets belong". **`§12.5` says no such thing** — that was a misreading of
+> the sibling's notes, and it points the opposite way from the family rule: an asset that lives in
+> another project cannot be *"copied as one script and used"*, which is one of the three reasons the
+> family settled on pixel art at all. **Each tool's pixel layer is its own**, and that now has one
+> home: [`Nesarf/NTVI`](https://github.com/Nesarf/NTVI) §一.
 
 **Verified rather than asserted** (2026-10-10): `grep -ri` for `nanodesu`, `torikago`, `ichiwatashi`
 and `一渡始` across every `.mjs`, `.ps1`, `.md` and `.json` in this repository returns **nothing**,
 and no path in `lib/` or `bin/` points at another project's checkout. `pixelfont.ps1`, `chamber.ps1`
-and `detain.ps1` contain zero references to any of them, and the font ships its **own 62 glyphs**.
+and `detain.ps1` contain zero references to any of them, and the font ships its **own 59 distinct
+glyphs** — not 62, which two documents claimed and which `test/smoke.mjs` now disproves by parsing
+the table. **That check exists because the wrong number had nothing looking at it.**
 
 So the current shape is the required one: this tool's pixel layer is self-contained by construction.
 **That is a constraint to hold, not a state to drift out of** — the first shared asset would be the
