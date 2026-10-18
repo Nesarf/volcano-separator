@@ -74,6 +74,14 @@ if ($Pixel) {
     }
     . $fontPath
     $pixelFont = New-VsPixelFont
+    # The embedded layout, next to this script. **Refused by name rather than silently falling
+    # back**: a window that quietly draws without its frame looks like a renderer bug, not a
+    # missing file.
+    $script:panelLayout = Join-Path $PSScriptRoot 'panel.json'
+    if (-not (Test-Path -LiteralPath $script:panelLayout)) {
+        Write-Error "-Pixel needs $($script:panelLayout); Ichiwatashi exports it: panel --tier console --export"
+        exit 2
+    }
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -321,8 +329,13 @@ function Refresh {
         if ($text -ne $script:lastPainted) {
             $script:lastPainted = $text
             $old = $pixelBox.Image
-            $pixelBox.Image = New-VsPixelPanel -Lines ($text -split "`r?`n") -Font $pixelFont `
-                -Scale $PixelScale -Cols 118 -MaxRows 46 -Bg $PANEL -Fg $INK
+            # **The frame comes from the embedded layout, not from this script.** `panel.json` is
+            # exported by Ichiwatashi (`panel --tier console --export`) and verified against it, so the
+            # rectangles, the close mark's pixels and the bevel rule are facts this script reads rather
+            # than decides. `New-VsPanel` still paints the glyphs with `New-VsPixelPanel`, which is the
+            # one part that was already pixel-exact.
+            $pixelBox.Image = New-VsPanel -LayoutFile $script:panelLayout -Lines ($text -split "`r?`n") `
+                -Font $pixelFont -Scale $PixelScale
             if ($old) { $old.Dispose() }
         }
     }
@@ -371,8 +384,8 @@ if ($PixelPng) {
     Start-Sleep -Milliseconds 1500
     $null = Refresh -Slow
     Add-Type -AssemblyName System.Drawing
-    $bmp = New-VsPixelPanel -Lines ((Render) -split "`r?`n") -Font $pixelFont `
-        -Scale $PixelScale -Cols 118 -MaxRows 46 -Bg $PANEL -Fg $INK
+    $bmp = New-VsPanel -LayoutFile $script:panelLayout -Lines ((Render) -split "`r?`n") `
+        -Font $pixelFont -Scale $PixelScale
     $bmp.Save($PixelPng, [System.Drawing.Imaging.ImageFormat]::Png)
     Write-Output ("bitmap {0}x{1} -> {2}" -f $bmp.Width, $bmp.Height, $PixelPng)
     $bmp.Dispose()

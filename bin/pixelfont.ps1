@@ -221,3 +221,102 @@ function New-VsPixelPanel {
     }
     return $bmp
 }
+
+
+# A whole panel -- frame, title bar, close mark, well -- painted from the layout file this project embeds.
+#
+# WHY THIS IS NOT ANOTHER LAYOUT. The frame's geometry comes out of the JSON, not out of this function: the
+# rectangles, the close mark's pixels, the bevel rule and the title's available width are all in the file, so
+# an error here is a misreading of the file rather than a second opinion about the window. That distinction is
+# the whole point of embedding data instead of copying code -- measured across two projects, the first version
+# of a renderer and a checker that each computed their own layout disagreed on the frame's first row, and the
+# two tools that shared a font also had to share the rule for what a frame looks like.
+#
+# HOW TO CHECK THIS. The same way as the font: dump it as text and read it.
+#
+#     $b = New-VsPanel -LayoutFile .\panel.json -Lines @('LIVE') -Font $f -Scale 1
+#     for ($y=0; $y -lt 12; $y++) { $l=''
+#       for ($x=0; $x -lt $b.Width; $x++) { $l += $(if ($b.GetPixel($x,$y).A -gt 0) {'#'} else {'.'}) }
+#       $l }
+#
+# Fills with FillRectangle rather than SetPixel: a filled rectangle is not smoothed by GDI+, only curves and
+# text are, so the fast path here is also the pixel-exact one. The glyphs still go through SetPixel, because
+# they are the one thing that must not be.
+function New-VsPanel {
+    param(
+        [Parameter(Mandatory)][string]$LayoutFile,
+        [string[]]$Lines = @(),
+        [hashtable]$Font,
+        [int]$Scale = 2
+    )
+
+    $p = Get-Content -LiteralPath $LayoutFile -Raw | ConvertFrom-Json
+    $w = [int]$p.size[0]
+    $h = [int]$p.size[1]
+    if ($Scale -lt 1) { throw "scale must be a positive whole number, got $Scale" }
+
+    # role -> key, and key -> colour. The JSON keeps one table per direction so a reader never has to guess
+    # which one it is holding; `colours` and `chars` are both keyed by the key.
+    $keyOf = @{}
+    foreach ($role in $p.roles) { $keyOf[$role] = $p.keys.$role }
+    $col = @{}
+    foreach ($prop in $p.colours.PSObject.Properties) {
+        $c = $prop.Value
+        $col[$prop.Name] = [System.Drawing.Color]::FromArgb([int]$c[3], [int]$c[0], [int]$c[1], [int]$c[2])
+    }
+
+    $bmp = New-Object System.Drawing.Bitmap ($w * $Scale), ($h * $Scale)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.Clear($col[$keyOf['frame_dark']])
+
+    function Fill([int[]]$rect, [string]$key) {
+        $x0 = $rect[0]; $y0 = $rect[1]; $x1 = $rect[2]; $y1 = $rect[3]
+        if ($x1 -le $x0 -or $y1 -le $y0) { return }
+        $brush = New-Object System.Drawing.SolidBrush $col[$key]
+        $g.FillRectangle($brush, $x0 * $Scale, $y0 * $Scale, ($x1 - $x0) * $Scale, ($y1 - $y0) * $Scale)
+        $brush.Dispose()
+    }
+
+    # the well and the title bar, then the bevel rings drawn over the frame
+    Fill $p.layout.well $keyOf['well']
+    Fill $p.layout.title $(if ($p.active) { $keyOf['title'] } else { $keyOf['title_inactive'] })
+
+    $rule = $p.bevel_rule
+    $ring = [int]$rule.ring_offset
+    if ($rule.lit_sides.Count -gt 0) {
+        $litTop = $rule.lit_sides -contains 'top'
+        $litLeft = $rule.lit_sides -contains 'left'
+        # the ring is four strips, drawn one at a time so a corner that lies on two sides is painted once
+        $fx0 = [int]$p.layout.frame[0]; $fy0 = [int]$p.layout.frame[1]
+        $fx1 = [int]$p.layout.frame[2]; $fy1 = [int]$p.layout.frame[3]
+        if ($litTop) { Fill @($fx0 + $ring, $fy0 + $ring, $fx1 - $ring, $fy0 + $ring + 1) $keyOf[$rule.inner_ring] }
+        if ($litLeft) { Fill @($fx0 + $ring, $fy0 + $ring, $fx0 + $ring + 1, $fy1 - $ring) $keyOf[$rule.inner_ring] }
+        # the shaded sides are the ring minus the lit ones, which is what "otherwise frame_dark" means
+        if (-not $litTop) { Fill @($fx0 + $ring, $fy0 + $ring, $fx1 - $ring, $fy0 + $ring + 1) $keyOf[$rule.outer_ring] }
+        if (-not $litLeft) { Fill @($fx0 + $ring, $fy0 + $ring, $fx0 + $ring + 1, $fy1 - $ring) $keyOf[$rule.outer_ring] }
+        # the bottom and right sides of the inner ring are always the shaded colour
+        Fill @($fx0 + $ring, $fy1 - $ring - 1, $fx1 - $ring, $fy1 - $ring) $keyOf[$rule.outer_ring]
+        Fill @($fx1 - $ring - 1, $fy0 + $ring, $fx1 - $ring, $fy1 - $ring) $keyOf[$rule.outer_ring]
+    }
+
+    # the close mark, pixel by pixel from the file: nine coordinates, not a shape this function decides
+    $markKey = $keyOf['close_mark']
+    foreach ($pt in $p.close_pixels) {
+        Fill @([int]$pt[0], [int]$pt[1], [int]$pt[0] + 1, [int]$pt[1] + 1) $markKey
+    }
+
+    # the body: the existing text renderer, positioned at the content rectangle
+    if ($Lines.Count -gt 0 -and $Font) {
+        $cx0 = [int]$p.layout.content[0]; $cy0 = [int]$p.layout.content[1]
+        $cx1 = [int]$p.layout.content[2]; $cy1 = [int]$p.layout.content[3]
+        $cols = [math]::Max(1, [int](($cx1 - $cx0) / 6))
+        $rows = [math]::Max(1, [int](($cy1 - $cy0) / 8))
+        $text = New-VsPixelPanel -Lines $Lines -Font $Font -Scale $Scale -Cols $cols -MaxRows $rows `
+            -Bg $col[$keyOf['content']] -Fg $col[$keyOf['title_text']]
+        $g.DrawImage($text, $cx0 * $Scale, $cy0 * $Scale)
+        $text.Dispose()
+    }
+
+    $g.Dispose()
+    return $bmp
+}
