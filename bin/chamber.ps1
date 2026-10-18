@@ -335,7 +335,7 @@ function Refresh {
             # than decides. `New-VsPanel` still paints the glyphs with `New-VsPixelPanel`, which is the
             # one part that was already pixel-exact.
             $pixelBox.Image = New-VsPanel -LayoutFile $script:panelLayout -Lines ($text -split "`r?`n") `
-                -Font $pixelFont -Scale $PixelScale
+                -Font $pixelFont -Scale $PixelScale -Title $form.Text
             if ($old) { $old.Dispose() }
         }
     }

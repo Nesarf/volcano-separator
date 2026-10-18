@@ -247,10 +247,15 @@ function New-VsPanel {
         [Parameter(Mandatory)][string]$LayoutFile,
         [string[]]$Lines = @(),
         [hashtable]$Font,
-        [int]$Scale = 2
+        [int]$Scale = 2,
+        # **The title is a parameter, not the file's value**, because a window title changes with what the
+        # window is showing: chamber puts the pid in it. The file still carries a title, and it is used when
+        # this is omitted, so the layout remains readable on its own.
+        [string]$Title
     )
 
     $p = Get-Content -LiteralPath $LayoutFile -Raw | ConvertFrom-Json
+    if (-not $Title) { $Title = [string]$p.title }
     $w = [int]$p.size[0]
     $h = [int]$p.size[1]
     if ($Scale -lt 1) { throw "scale must be a positive whole number, got $Scale" }
@@ -303,6 +308,23 @@ function New-VsPanel {
     $markKey = $keyOf['close_mark']
     foreach ($pt in $p.close_pixels) {
         Fill @([int]$pt[0], [int]$pt[1], [int]$pt[0] + 1, [int]$pt[1] + 1) $markKey
+    }
+
+    # the title, inside the room the file says it has. **Refused if it does not fit** rather than truncated:
+    # a title that silently becomes different words is the defect the layout layer was built to prevent.
+    if ($Title -and $Font) {
+        $room = [int]$p.title_room[1]
+        $need = $Title.Length * 6
+        if ($need -gt $room) {
+            $g.Dispose(); $bmp.Dispose()
+            throw "title '$Title' needs $need px but the title bar has $room"
+        }
+        $ty0 = [int]$p.layout.title[1]
+        $tx0 = [int]$p.title_room[0]
+        $strip = New-VsPixelPanel -Lines @($Title) -Font $Font -Scale $Scale -Cols $Title.Length -MaxRows 1 `
+            -Bg $col[$keyOf['title']] -Fg $col[$keyOf['title_text']]
+        $g.DrawImage($strip, $tx0 * $Scale, ($ty0 + 1) * $Scale)
+        $strip.Dispose()
     }
 
     # the body: the existing text renderer, positioned at the content rectangle
