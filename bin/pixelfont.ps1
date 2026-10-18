@@ -189,7 +189,13 @@ function New-VsPixelPanel {
         if ($line.Length -gt $cols) { $line = $line.Substring(0, $cols) }
         elseif ($line.Length -lt $cols) { $line = $line.PadRight($cols) }
         for ($x = 0; $x -lt $line.Length; $x++) {
-            $glyphKey = $line.Substring($x, 1).ToUpperInvariant()
+            # **Case is preserved now, and that was a real dead end.** This line used to be
+            # `.ToUpperInvariant()`, which was correct while the table held only capitals -- and it meant the
+            # 26 lower-case glyphs added from the shared font would never have been drawn. Measured: the
+            # table gained them and the renderer still collapsed every letter to upper case, so the data was
+            # shared and then discarded at the one place it mattered. The fallback box below still catches
+            # anything the table genuinely lacks.
+            $glyphKey = $line.Substring($x, 1)
             $glyph = $Font[$glyphKey]
             if (-not $glyph) { $glyph = @(31, 17, 17, 17, 17, 17, 31) }   # an outlined box: visibly not a letter
             for ($r = 0; $r -lt 7; $r++) {
