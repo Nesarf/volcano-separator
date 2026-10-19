@@ -329,12 +329,18 @@ function New-VsPanel {
 
     # the body: the existing text renderer, positioned at the content rectangle
     if ($Lines.Count -gt 0 -and $Font) {
+        # **The body's ink is the layout's own role, or the title's ink when the file predates it.**
+        # All three renderers used to draw body text in title_text, so a change to the bar's ink restyled
+        # every report and nothing anywhere said the body was borrowing. `content_text` was added to the
+        # shared layout for that; the fallback keeps a file exported before it working unchanged.
+        $bodyInk = $keyOf['content_text']
+        if (-not $bodyInk) { $bodyInk = $keyOf['title_text'] }
         $cx0 = [int]$p.layout.content[0]; $cy0 = [int]$p.layout.content[1]
         $cx1 = [int]$p.layout.content[2]; $cy1 = [int]$p.layout.content[3]
         $cols = [math]::Max(1, [int](($cx1 - $cx0) / 6))
         $rows = [math]::Max(1, [int](($cy1 - $cy0) / 8))
         $text = New-VsPixelPanel -Lines $Lines -Font $Font -Scale $Scale -Cols $cols -MaxRows $rows `
-            -Bg $col[$keyOf['content']] -Fg $col[$keyOf['title_text']]
+            -Bg $col[$keyOf['content']] -Fg $col[$bodyInk]
         $g.DrawImage($text, $cx0 * $Scale, $cy0 * $Scale)
         $text.Dispose()
     }

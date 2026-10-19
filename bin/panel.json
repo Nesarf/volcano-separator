@@ -13,6 +13,7 @@
  "chars": {
   "cm": "x",
   "ct": " ",
+  "cx": null,
   "fd": "#",
   "fl": "+",
   "ta": "-",
@@ -21,7 +22,7 @@
   "wl": " "
  },
  "chars_note": "null means the role is drawn as font glyphs, not as one character",
- "checksum": "baac6f772f90c4da67b3995d5d3164f35ee46c4f15ed7af86f5b428e74fcb7b6",
+ "checksum": "974460bf932d728fd1b7786c30e0abe6a6e9e42d34d09560d0274b2a5bfae637",
  "close_pixels": [
   [
    708,
@@ -73,6 +74,12 @@
    84,
    255
   ],
+  "cx": [
+   212,
+   206,
+   232,
+   255
+  ],
   "fd": [
    24,
    22,
@@ -114,6 +121,7 @@
  "keys": {
   "close_mark": "cm",
   "content": "ct",
+  "content_text": "cx",
   "frame_dark": "fd",
   "frame_light": "fl",
   "title": "ta",
@@ -161,7 +169,8 @@
   "title_text",
   "close_mark",
   "well",
-  "content"
+  "content",
+  "content_text"
  ],
  "size": [
   716,
@@ -175,7 +184,7 @@
   "title_h": 9
  },
  "tier": "console",
- "title": "VOLCANO SEPARATOR",
+ "title": null,
  "title_room": [
   4,
   703
