@@ -80,3 +80,15 @@ npm run test / syntax / status / heal / doctor / mcp
 ## 发布
 
 GitHub 仓库 `Nesarf/volcano-separator`，tag 与 CHANGELOG 记录版本（当前 1.5.0）。没有 PyPI 包；它是本机工具，随仓库使用。
+
+## 规模（测量值）
+
+```
+文件 38 · 代码行 18834 · 依赖边 74 · 测试文件 3 · 外部引用 9
+被最多模块引用的：lib/platform.mjs (18) · lib/commandline.mjs (9) · lib/activity.mjs (8)
+```
+
+文件最少、边最密。`platform.mjs` 被十八个模块引用，替换它等于同时动十八处 —— 这是全工程耦合最重的一点。
+
+数字来自 `library_project op=map`（mega-index-map）对目录的静态清点。它数得出规模与依赖边，数不出职责与边界：
+前者在这一节，后者在上面的正文里。
