@@ -34,6 +34,15 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      # The suite drives `uvx` through the warmth probe, and says so when it cannot: "no uvx" was the detail
+      # on eight failed assertions, which is the tool reporting a missing dependency accurately rather than a
+      # defect in it. Installed here so the assertions meet the thing they are about.
+      - name: uv, which the warmth probe drives
+        if: runner.os == 'Windows'
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
       - name: Node version
         run: node --version
 
