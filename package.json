@@ -1,7 +1,7 @@
 {
   "name": "volcano-separator",
   "version": "1.5.0",
-  "description": "Decouples uv, the Hindsight daemon and its data from one fragile chain: warm with no watchdog, serve in seconds, watch on a heartbeat.",
+  "description": "A Windows workstation supervisor: keeps a service reachable and makes the machine say what it is doing -- activity record, process custody, and a read-only MCP surface.",
   "type": "module",
   "license": "MIT",
   "repository": {
