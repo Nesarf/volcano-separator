@@ -21,8 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The staging model is portable; the scheduled-task integration is Windows-only,
-        # so both platforms are worth exercising.
+        # Both platforms still parse every source file; the suite itself runs on Windows only, because
+        # what it asserts is Windows behaviour. See the Smoke step.
         os: [ubuntu-latest, windows-latest]
         # 20 is the declared floor in package.json; 24 is the current LTS.
         node: ['20', '22', '24']
@@ -48,5 +48,12 @@ jobs:
           done
 
       # Offline: no network, no uv, no hindsight daemon required.
+      #
+      # **Windows only, and the first run of this workflow proved why.** The suite asserts Windows behaviour:
+      # a process started from a scratch directory, a binary that vanished, a vault key protected through
+      # DPAPI. On ubuntu those assertions failed on behaviour that does not exist there, and the report read
+      # "the tool is broken" rather than "this is a Windows tool". Ubuntu still runs the syntax check above,
+      # which is a real check on a real platform.
       - name: Smoke test
+        if: runner.os == 'Windows'
         run: node test/smoke.mjs
