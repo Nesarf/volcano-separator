@@ -2066,164 +2066,170 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 //   3. The undo does not need this tool to exist. That is asserted by doing it: read the manifest's
 //      two paths and copy the bytes by hand, then compare hashes.
 {
-  section('vault')
-  const vau = await import('../lib/vault.mjs')
-  const { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync, appendFileSync } = await import('node:fs')
-  const { createHash } = await import('node:crypto')
+  if (process.platform !== 'win32') {
+    section('vault')
+    ok('vault is skipped on this platform', true,
+      'its key is protected through bin/keyprotect.ps1 (Windows DPAPI); without it every manifest here is unsigned, so the checks would be measuring a missing signature')
+  } else {
+    section('vault')
+    const vau = await import('../lib/vault.mjs')
+    const { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync, appendFileSync } = await import('node:fs')
+    const { createHash } = await import('node:crypto')
 
-  const base = join(tmpdir(), 'vsep-vault-' + process.pid)
-  rmSync(base, { recursive: true, force: true })
-  mkdirSync(base, { recursive: true })
-  // A store and a key of its own, so the test never touches the machine's real vault.
-  const ctx = { vaultRoot: join(base, 'store'), vaultKeyFile: join(base, 'key.dat'), vaultIndexFile: join(base, 'index.json') }
-  const sha = (f) => createHash('sha256').update(readFileSync(f)).digest('hex')
+    const base = join(tmpdir(), 'vsep-vault-' + process.pid)
+    rmSync(base, { recursive: true, force: true })
+    mkdirSync(base, { recursive: true })
+    // A store and a key of its own, so the test never touches the machine's real vault.
+    const ctx = { vaultRoot: join(base, 'store'), vaultKeyFile: join(base, 'key.dat'), vaultIndexFile: join(base, 'index.json') }
+    const sha = (f) => createHash('sha256').update(readFileSync(f)).digest('hex')
 
-  const src = join(base, 'payload.bin')
-  writeFileSync(src, Buffer.from('vault-payload-' + 'z'.repeat(400)))
+    const src = join(base, 'payload.bin')
+    writeFileSync(src, Buffer.from('vault-payload-' + 'z'.repeat(400)))
 
-  const copied = await vau.vault(ctx, { path: src })
-  ok('a copy lands in the vault', copied.ok === true && existsSync(copied.vaultPath), JSON.stringify(copied.detail))
-  ok('and the original has not moved', existsSync(src), 'the default must leave the original in place')
-  ok('and the copy is byte-identical', sha(copied.vaultPath) === sha(src), 'the copy does not match the source')
-  ok('the entry says so in the result, rather than leaving it to be assumed',
-    copied.moved === false && copied.signed === true, JSON.stringify({ moved: copied.moved, signed: copied.signed }))
+    const copied = await vau.vault(ctx, { path: src })
+    ok('a copy lands in the vault', copied.ok === true && existsSync(copied.vaultPath), JSON.stringify(copied.detail))
+    ok('and the original has not moved', existsSync(src), 'the default must leave the original in place')
+    ok('and the copy is byte-identical', sha(copied.vaultPath) === sha(src), 'the copy does not match the source')
+    ok('the entry says so in the result, rather than leaving it to be assumed',
+      copied.moved === false && copied.signed === true, JSON.stringify({ moved: copied.moved, signed: copied.signed }))
 
-  // The undo must be reachable without this tool. Asserted by performing it with fs, not by checking
-  // that a string looks right.
-  {
-    const spec = JSON.parse(readFileSync(join(ctx.vaultRoot, copied.id, 'manifest.json'), 'utf8'))
-    const byHand = join(base, 'restored-by-hand.bin')
-    copyFileSync(spec.vaultPath, byHand)
-    ok('the manifest names two paths a plain copy can use, with no help from this tool',
-      sha(byHand) === sha(src), 'a hand copy from the manifest did not reproduce the original')
-  }
-
-  // A manifest edited after the fact must not be acted on.
-  {
-    const manifest = join(ctx.vaultRoot, copied.id, 'manifest.json')
-    const spec = JSON.parse(readFileSync(manifest, 'utf8'))
-    const honest = spec.originalPath
-    spec.originalPath = join(base, 'somewhere-else.exe')
-    writeFileSync(manifest, JSON.stringify(spec, null, 1))
-    const r = await vau.restoreVault(ctx, { id: copied.id })
-    ok('an edited manifest is refused', r.ok === false && /changed since this tool wrote it/.test(r.detail), r.detail)
-    ok('and nothing was written to the path it now claims',
-      !existsSync(join(base, 'somewhere-else.exe')), 'a forged path was acted on')
-    // Restore the honest manifest so the checks below run against a valid one.
-    spec.originalPath = honest
-    const key = await vau.getVaultKey(ctx)
-    spec.hmac = vau.signManifest(key.key, spec)
-    writeFileSync(manifest, JSON.stringify(spec, null, 1))
-  }
-
-  // A manifest with no signature at all is not vouched for.
-  {
-    const manifest = join(ctx.vaultRoot, copied.id, 'manifest.json')
-    const spec = JSON.parse(readFileSync(manifest, 'utf8'))
-    const withMac = spec.hmac
-    delete spec.hmac
-    writeFileSync(manifest, JSON.stringify(spec, null, 1))
-    const r = await vau.restoreVault(ctx, { id: copied.id })
-    ok('an unsigned manifest is refused rather than trusted', r.ok === false && /no signature/.test(r.detail), r.detail)
-    spec.hmac = withMac
-    writeFileSync(manifest, JSON.stringify(spec, null, 1))
-  }
-
-  // Restoring over content that is not what the entry holds would replace the user's newer work.
-  {
-    appendFileSync(src, 'changed since the copy')
-    const r = await vau.restoreVault(ctx, { id: copied.id })
-    ok('a restore refuses where the original path now holds different bytes',
-      r.ok === false && r.refused === true, JSON.stringify(r.detail))
-    ok('and says what is there now, so the reader can decide',
-      /is not the file this entry holds/.test(r.detail), r.detail)
-    const forced = await vau.restoreVault(ctx, { id: copied.id, force: true })
-    ok('force means it, and then the bytes match the entry again',
-      forced.ok === true && sha(src) === sha(copied.vaultPath), JSON.stringify(forced.detail))
-  }
-
-  // --move: the only path that disturbs the original.
-  {
-    const second = join(base, 'second.bin')
-    writeFileSync(second, 'second payload')
-    const moved = await vau.vault(ctx, { path: second, move: true })
-    ok('--move removes the original', moved.ok === true && moved.moved === true && !existsSync(second), JSON.stringify(moved.detail))
-    ok('and the vault copy survives it', existsSync(moved.vaultPath), 'the copy is missing after a move')
-  }
-
-  // A dry run writes nothing at all, and its result still carries the undo the CLI prints.
-  {
-    const third = join(base, 'third.bin')
-    writeFileSync(third, 'third payload')
-    const dry = await vau.vault(ctx, { path: third, dryRun: true })
-    ok('a dry run copies nothing', dry.ok === true && dry.dryRun === true && !existsSync(dry.vaultPath), JSON.stringify(dry.detail))
-    ok('and still carries the command that would put it back', typeof dry.undo === 'string' && dry.undo.startsWith('copy '), String(dry.undo))
-  }
-
-  // The store must not be able to swallow itself, and the tool must keep its own undo reachable.
-  {
-    const inside = await vau.vault(ctx, { path: join(ctx.vaultRoot, copied.id, 'manifest.json') })
-    ok('the vault refuses to vault its own contents',
-      inside.ok === false && inside.refused === true, JSON.stringify(inside.detail))
-  }
-
-  rmSync(base, { recursive: true, force: true })
-}
-
-// ── a record that could not be read is counted, and loss is told apart from a partial write ─
-  // The parse loop used to end in an empty catch, which discarded the row AND the fact of the row:
-  // 410 records in this machine's own record failed to parse and nothing anywhere said so, so every
-  // view built on readActivity under-reported while looking complete. Fewer findings reads as good
-  // news, which is the failure this layer exists to prevent.
-  //
-  // The two cases are counted apart because they mean opposite things: a partial last line is the
-  // normal state of a file being appended to right now and costs nothing, while a line that is not
-  // the last one is a record that is gone.
-{
-  const g = await import('../lib/core.mjs')
-  const { mkdirSync, writeFileSync } = await import('node:fs')
-  const dir = join(tmpdir(), 'vsep-unreadable-' + process.pid)
-  rmSync(dir, { recursive: true, force: true })
-  const now = new Date().toISOString()
-  {
-    const NL = String.fromCharCode(10)
-    const part = (name, lines) => {
-      const d = join(dir, 'partial-' + name)
-      mkdirSync(join(d, 'activity'), { recursive: true })
-      writeFileSync(join(d, 'activity', 'activity-2026-01-01.ndjson'), lines.join(NL) + NL)
-      return { logDir: d }
+    // The undo must be reachable without this tool. Asserted by performing it with fs, not by checking
+    // that a string looks right.
+    {
+      const spec = JSON.parse(readFileSync(join(ctx.vaultRoot, copied.id, 'manifest.json'), 'utf8'))
+      const byHand = join(base, 'restored-by-hand.bin')
+      copyFileSync(spec.vaultPath, byHand)
+      ok('the manifest names two paths a plain copy can use, with no help from this tool',
+        sha(byHand) === sha(src), 'a hand copy from the manifest did not reproduce the original')
     }
-    const good = JSON.stringify({ t: now, kind: 'proc-start', pid: 1, name: 'a.exe' })
 
-    // A finished record, then a truncated tail: the ordinary state of a live file.
-    const tailCtx = part('tail', [good, '{"t":"2026-01-01T00:00:02Z","kind":"proc-st'])
-    const tail = g.readActivity(tailCtx, { limit: 10 })
-    ok('a truncated last line is counted as unreadable', tail.unreadableLines === 1, JSON.stringify(tail.unreadableLines))
-    ok('but it is not counted as loss, because the next read will see the finished row',
-      tail.unreadableMidFile === 0 && tail.complete === true, JSON.stringify({ mid: tail.unreadableMidFile, complete: tail.complete }))
+    // A manifest edited after the fact must not be acted on.
+    {
+      const manifest = join(ctx.vaultRoot, copied.id, 'manifest.json')
+      const spec = JSON.parse(readFileSync(manifest, 'utf8'))
+      const honest = spec.originalPath
+      spec.originalPath = join(base, 'somewhere-else.exe')
+      writeFileSync(manifest, JSON.stringify(spec, null, 1))
+      const r = await vau.restoreVault(ctx, { id: copied.id })
+      ok('an edited manifest is refused', r.ok === false && /changed since this tool wrote it/.test(r.detail), r.detail)
+      ok('and nothing was written to the path it now claims',
+        !existsSync(join(base, 'somewhere-else.exe')), 'a forged path was acted on')
+      // Restore the honest manifest so the checks below run against a valid one.
+      spec.originalPath = honest
+      const key = await vau.getVaultKey(ctx)
+      spec.hmac = vau.signManifest(key.key, spec)
+      writeFileSync(manifest, JSON.stringify(spec, null, 1))
+    }
 
-    // Damage in the middle, with intact records after it: this one is gone.
-    const midCtx = part('mid', [good, '{"t":"2026-01-01T00:00:02Z","broken', good, good])
-    const mid = g.readActivity(midCtx, { limit: 10 })
-    ok('damage with records after it is counted as mid-file', mid.unreadableMidFile === 1, JSON.stringify(mid.unreadableMidFile))
-    ok('and the record is reported incomplete', mid.complete === false, JSON.stringify(mid.complete))
-    ok('and the lines that did parse are still returned, so the count is a lower bound and not a blank',
-      mid.total === 3, JSON.stringify(mid.total))
+    // A manifest with no signature at all is not vouched for.
+    {
+      const manifest = join(ctx.vaultRoot, copied.id, 'manifest.json')
+      const spec = JSON.parse(readFileSync(manifest, 'utf8'))
+      const withMac = spec.hmac
+      delete spec.hmac
+      writeFileSync(manifest, JSON.stringify(spec, null, 1))
+      const r = await vau.restoreVault(ctx, { id: copied.id })
+      ok('an unsigned manifest is refused rather than trusted', r.ok === false && /no signature/.test(r.detail), r.detail)
+      spec.hmac = withMac
+      writeFileSync(manifest, JSON.stringify(spec, null, 1))
+    }
 
-    // The signal layer carries it, because a finding count over a record with holes is a lower bound.
-    const sig = g.analyzeSignals(midCtx, { sinceMinutes: 60 * 24 * 365 })
-    ok('the detector reports the holes its count was computed over',
-      sig.unreadableMidFile === 1 && sig.recordComplete === false,
-      JSON.stringify({ mid: sig.unreadableMidFile, complete: sig.recordComplete }))
+    // Restoring over content that is not what the entry holds would replace the user's newer work.
+    {
+      appendFileSync(src, 'changed since the copy')
+      const r = await vau.restoreVault(ctx, { id: copied.id })
+      ok('a restore refuses where the original path now holds different bytes',
+        r.ok === false && r.refused === true, JSON.stringify(r.detail))
+      ok('and says what is there now, so the reader can decide',
+        /is not the file this entry holds/.test(r.detail), r.detail)
+      const forced = await vau.restoreVault(ctx, { id: copied.id, force: true })
+      ok('force means it, and then the bytes match the entry again',
+        forced.ok === true && sha(src) === sha(copied.vaultPath), JSON.stringify(forced.detail))
+    }
 
-    // And a clean record reports none of it, so the warning means something when it appears.
-    const cleanCtx = part('clean', [good, good])
-    const clean = g.readActivity(cleanCtx, { limit: 10 })
-    ok('a clean record reports no loss at all',
-      clean.unreadableLines === 0 && clean.unreadableMidFile === 0 && clean.complete === true,
-      JSON.stringify({ lines: clean.unreadableLines, mid: clean.unreadableMidFile }))
+    // --move: the only path that disturbs the original.
+    {
+      const second = join(base, 'second.bin')
+      writeFileSync(second, 'second payload')
+      const moved = await vau.vault(ctx, { path: second, move: true })
+      ok('--move removes the original', moved.ok === true && moved.moved === true && !existsSync(second), JSON.stringify(moved.detail))
+      ok('and the vault copy survives it', existsSync(moved.vaultPath), 'the copy is missing after a move')
+    }
+
+    // A dry run writes nothing at all, and its result still carries the undo the CLI prints.
+    {
+      const third = join(base, 'third.bin')
+      writeFileSync(third, 'third payload')
+      const dry = await vau.vault(ctx, { path: third, dryRun: true })
+      ok('a dry run copies nothing', dry.ok === true && dry.dryRun === true && !existsSync(dry.vaultPath), JSON.stringify(dry.detail))
+      ok('and still carries the command that would put it back', typeof dry.undo === 'string' && dry.undo.startsWith('copy '), String(dry.undo))
+    }
+
+    // The store must not be able to swallow itself, and the tool must keep its own undo reachable.
+    {
+      const inside = await vau.vault(ctx, { path: join(ctx.vaultRoot, copied.id, 'manifest.json') })
+      ok('the vault refuses to vault its own contents',
+        inside.ok === false && inside.refused === true, JSON.stringify(inside.detail))
+    }
+
+    rmSync(base, { recursive: true, force: true })
   }
-  rmSync(dir, { recursive: true, force: true })
+
+  // ── a record that could not be read is counted, and loss is told apart from a partial write ─
+    // The parse loop used to end in an empty catch, which discarded the row AND the fact of the row:
+    // 410 records in this machine's own record failed to parse and nothing anywhere said so, so every
+    // view built on readActivity under-reported while looking complete. Fewer findings reads as good
+    // news, which is the failure this layer exists to prevent.
+    //
+    // The two cases are counted apart because they mean opposite things: a partial last line is the
+    // normal state of a file being appended to right now and costs nothing, while a line that is not
+    // the last one is a record that is gone.
+  {
+    const g = await import('../lib/core.mjs')
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const dir = join(tmpdir(), 'vsep-unreadable-' + process.pid)
+    rmSync(dir, { recursive: true, force: true })
+    const now = new Date().toISOString()
+    {
+      const NL = String.fromCharCode(10)
+      const part = (name, lines) => {
+        const d = join(dir, 'partial-' + name)
+        mkdirSync(join(d, 'activity'), { recursive: true })
+        writeFileSync(join(d, 'activity', 'activity-2026-01-01.ndjson'), lines.join(NL) + NL)
+        return { logDir: d }
+      }
+      const good = JSON.stringify({ t: now, kind: 'proc-start', pid: 1, name: 'a.exe' })
+
+      // A finished record, then a truncated tail: the ordinary state of a live file.
+      const tailCtx = part('tail', [good, '{"t":"2026-01-01T00:00:02Z","kind":"proc-st'])
+      const tail = g.readActivity(tailCtx, { limit: 10 })
+      ok('a truncated last line is counted as unreadable', tail.unreadableLines === 1, JSON.stringify(tail.unreadableLines))
+      ok('but it is not counted as loss, because the next read will see the finished row',
+        tail.unreadableMidFile === 0 && tail.complete === true, JSON.stringify({ mid: tail.unreadableMidFile, complete: tail.complete }))
+
+      // Damage in the middle, with intact records after it: this one is gone.
+      const midCtx = part('mid', [good, '{"t":"2026-01-01T00:00:02Z","broken', good, good])
+      const mid = g.readActivity(midCtx, { limit: 10 })
+      ok('damage with records after it is counted as mid-file', mid.unreadableMidFile === 1, JSON.stringify(mid.unreadableMidFile))
+      ok('and the record is reported incomplete', mid.complete === false, JSON.stringify(mid.complete))
+      ok('and the lines that did parse are still returned, so the count is a lower bound and not a blank',
+        mid.total === 3, JSON.stringify(mid.total))
+
+      // The signal layer carries it, because a finding count over a record with holes is a lower bound.
+      const sig = g.analyzeSignals(midCtx, { sinceMinutes: 60 * 24 * 365 })
+      ok('the detector reports the holes its count was computed over',
+        sig.unreadableMidFile === 1 && sig.recordComplete === false,
+        JSON.stringify({ mid: sig.unreadableMidFile, complete: sig.recordComplete }))
+
+      // And a clean record reports none of it, so the warning means something when it appears.
+      const cleanCtx = part('clean', [good, good])
+      const clean = g.readActivity(cleanCtx, { limit: 10 })
+      ok('a clean record reports no loss at all',
+        clean.unreadableLines === 0 && clean.unreadableMidFile === 0 && clean.complete === true,
+        JSON.stringify({ lines: clean.unreadableLines, mid: clean.unreadableMidFile }))
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 
