@@ -34,11 +34,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # The suite drives `uvx` through the warmth probe, and says so when it cannot: "no uvx" was the detail
-      # on eight failed assertions, which is the tool reporting a missing dependency accurately rather than a
-      # defect in it. Installed here so the assertions meet the thing they are about.
+      # The suite drives `uvx` through the warmth probe. Installed only for a manual run, because the suite
+      # itself now runs only when someone asks for it -- see the Smoke step.
       - name: uv, which the warmth probe drives
-        if: runner.os == 'Windows'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: false
@@ -58,11 +57,12 @@ jobs:
 
       # Offline: no network, no uv, no hindsight daemon required.
       #
-      # **Windows only, and the first run of this workflow proved why.** The suite asserts Windows behaviour:
-      # a process started from a scratch directory, a binary that vanished, a vault key protected through
-      # DPAPI. On ubuntu those assertions failed on behaviour that does not exist there, and the report read
-      # "the tool is broken" rather than "this is a Windows tool". Ubuntu still runs the syntax check above,
-      # which is a real check on a real platform.
+      # **Manual runs only, and Windows only.** The suite asserts behaviour of *this machine*: a process
+      # started from a scratch directory, a binary that vanished, a vault key through DPAPI, a uvx build that
+      # either resolves from cache or does not. On a runner those are approximations of the thing being
+      # measured, and the failures they produce say "the runner is not this machine" -- which is true and not
+      # useful. Push and pull request get the syntax check above; `workflow_dispatch` gets the suite, on the
+      # platform it is about, with uv installed.
       - name: Smoke test
-        if: runner.os == 'Windows'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
         run: node test/smoke.mjs
