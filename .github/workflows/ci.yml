@@ -34,13 +34,6 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # The suite drives `uvx` through the warmth probe. Installed only for a manual run, because the suite
-      # itself now runs only when someone asks for it -- see the Smoke step.
-      - name: uv, which the warmth probe drives
-        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: false
 
       - name: Node version
         run: node --version
@@ -55,14 +48,8 @@ jobs:
             echo "parsed  $f"
           done
 
-      # Offline: no network, no uv, no hindsight daemon required.
-      #
-      # **Manual runs only, and Windows only.** The suite asserts behaviour of *this machine*: a process
-      # started from a scratch directory, a binary that vanished, a vault key through DPAPI, a uvx build that
-      # either resolves from cache or does not. On a runner those are approximations of the thing being
-      # measured, and the failures they produce say "the runner is not this machine" -- which is true and not
-      # useful. Push and pull request get the syntax check above; `workflow_dispatch` gets the suite, on the
-      # platform it is about, with uv installed.
-      - name: Smoke test
-        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
-        run: node test/smoke.mjs
+      # **No suite here, on purpose.** `node test/smoke.mjs` measures this machine: a real service
+      # listening on a port, a PostgreSQL instance under pg0, a warm uvx cache, DPAPI for the vault key.
+      # A runner has none of those, and each missing piece produced a red run that meant "the runner is not
+      # the development machine" -- true, and not something anyone should learn to ignore. Run the suite
+      # locally; CI checks that every source file parses, on both platforms, which is a real check anywhere.
