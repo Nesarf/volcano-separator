@@ -42,6 +42,35 @@
       checked, and the suite asserts each one **by removing it and watching the request fail** — a
       happy-path test passes just as well against a server with no guard at all.
 
+- **`--allow-quiesce` adds the only two bindings that change the machine: suspend the heartbeat, and
+  give it back.** The rule this project already carries is "stop the scheduled task before touching the
+  host, because `heal` restarts the daemon's descendants after the host is gone and then nothing stays
+  killed". Following it meant typing two PowerShell commands in the right order and remembering the
+  second one at the end of an exhausting repair. A program can be handed a handle and will carry it; a
+  person reading a checklist at the end of a repair is the part that gets forgotten.
+  - **The handle is what makes it a pair.** `volcano_quiesce` returns one and `volcano_resume` demands
+    it, so two callers cannot interleave and the second cannot resume a suspension the first still
+    depends on. That failure would read as "the heartbeat came back on its own", which is the kind of
+    ghost this project exists to stop chasing.
+  - **It restores what it found, not what is convenient.** A task the user had already disabled stays
+    disabled. The other reading — "resume means enabled" — would let a tool call quietly override a
+    human decision, and the person who disabled it would find it back on with no explanation.
+  - **It takes no task name.** The only task it can touch is the one it was constructed with. A tool
+    that disables an arbitrary scheduled task is a different tool with a different argument and a
+    different discussion, and folding it in here would widen a narrow promise by accident.
+  - **An unreleased suspension is given back when the server stops**, on the CLI shutdown path, because
+    that is the only place that can: the handle lives in that process's memory and enabling a task needs
+    a child process it is about to stop being.
+  - **It cannot survive being force-killed, and says so.** A terminated process never gets to start the
+    child that would enable the task, so a pending suspension is written to disk and reported on the
+    next start rather than pretended away. It is deliberately **not** released automatically then: the
+    record says what the state was, but the world has had time to move, and re-enabling on a guess is how
+    a safety mechanism becomes the thing that switches the safety mechanism on.
+  - **Verified against the real task, not only against a fake.** `ready` → `disabled` → `ready`, with the
+    disk record cleared. The suite itself runs against an injected `exec` and never touches a real
+    scheduled task: a test that disables the real heartbeat changes the thing it measures, and the first
+    time it flaked it would leave the machine with no watchdog.
+
 - **`vsep ptc --extras <path>`: external commands as bindings, and only when a file names them.**
   Without the flag they do not exist, and the built-in sixteen are the whole surface. A file rather
   than a handful of hardcoded paths, because *origin* and *dependency* are different things: a resource

@@ -173,6 +173,11 @@ Options:
                      ever carries a CORS header, which is what keeps a browser page out.
                      --extras names a JSON file of external commands to expose as bindings; without
                      it the built-in tools are the whole list.
+                     --allow-quiesce adds volcano_quiesce / volcano_resume, the only two bindings that
+                     change machine state: they disable THIS tool's heartbeat (its scheduled task) so a
+                     repair of the host can actually stop it, and restore what they found afterwards.
+                     Off by default. The task name is not a parameter -- it can only ever touch its own
+                     heartbeat -- and an unreleased suspension is given back when the server stops.
   entity <pid|path|port> <value>
                      everything known about one process, one file or one port, from every surface
                      at once. A port resolves to the pid holding it now, which is the join back to
@@ -303,8 +308,13 @@ async function main() {
       // which is already restricted to this user on every platform; the switch is for a caller that
       // manages its own secret directory. Nothing prints the value -- see the auth line below.
       const tokenPath = opts['token-file'] ? String(opts['token-file']) : null
+      // The two write bindings are off unless this switch is given, and their absence is the default
+      // rather than a hidden mode: `volcano_quiesce` disables the heartbeat, and a tool that can stop
+      // its own watchdog should have to be asked for by name. The value is compared rather than
+      // coerced, because `--allow-quiesce false` is a string and a string is truthy.
+      const allowQuiesce = opts['allow-quiesce'] === true || opts['allow-quiesce'] === 'true'
       const { createPtcServer, listen, DENIED } = await import('../lib/ptc.mjs')
-      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath })
+      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath, allowQuiesce, taskName: ctx.taskName })
       let addr
       try {
         addr = await listen(server, { webPort: port })
@@ -323,6 +333,8 @@ async function main() {
         console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
         if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
         console.log(C.dim(`  auth    : POST /ptc/run needs the x-vsep-token header; token file ${server.ptcInfo.tokenPath}`))
+        if (server.ptcInfo.quiesce) console.log(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
+        else console.log(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))
         console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
       }
       // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an
@@ -331,6 +343,12 @@ async function main() {
         process.once('SIGINT', resolve)
         process.once('SIGTERM', resolve)
       })
+      // Give a suspension back before this process goes away. This is the only place that can: the
+      // handle lives in this process's memory, and enabling a scheduled task needs a child process that
+      // this one is about to stop being.
+      const released = await server.releaseQuiesce('ptc server stopping')
+      if (released.released) console.log(C.dim('ptc: the heartbeat suspension was released'))
+      else if (released.ok === false) console.error(C.red('WARN') + `: could not release the heartbeat suspension: ${released.why}`)
       await new Promise((resolve) => server.close(resolve))
       console.log(C.dim('ptc: closed'))
       process.exit(0)

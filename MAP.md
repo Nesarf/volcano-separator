@@ -50,6 +50,7 @@ mcp.mjs          MCP 表面（stdio 传输）；工具面已搬到 tools.mjs，�
 ptc.mjs          可编程表面：POST /ptc/run 提交一段程序，绑定是 tools.mjs 导出的只读工具
 extras.mjs       可选外部命令绑定：--extras 指定的文件，默认不存在（核心不认识别的工程）
 ui.mjs           网页：读 ui/page.html，填入 bin/panel.json 的九色与绑定列表
+quiesce.mjs      心跳的挂起与归还：--allow-quiesce 才存在，只碰自己那一个计划任务
 ```
 
 ## 数据流

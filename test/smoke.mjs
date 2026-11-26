@@ -3935,6 +3935,164 @@ await new Promise((resolve) => ptcSrv.close(resolve))
 ok('the surface closes', ptcSrv.listening === false)
 rmSync(ptcTokenFile, { force: true })
 
+// --- quiesce: the pair that suspends the heartbeat and gives it back ---------- //
+// Nothing here touches a real scheduled task. `exec` is injected with a fake Windows that records
+// every call and answers from a scripted state, so what is asserted is this module's reasoning -- what
+// it decides to call, what it refuses, and what it restores -- rather than what happens to be installed
+// on the machine running the suite. A test that disabled the real heartbeat would be a test that
+// changes the thing it is measuring, and the first time it flaked it would leave the machine with no
+// watchdog.
+section('quiesce')
+
+const qs = await import('../lib/quiesce.mjs')
+
+function fakeWindows({ state = 'ready', failDisable = false, failEnable = false } = {}) {
+  const calls = []
+  let current = state === 'missing' ? 'missing' : state
+  const exec = async (script) => {
+    calls.push(script)
+    if (/Get-ScheduledTask/.test(script)) {
+      return { ok: true, code: 0, stdout: current === 'missing' ? 'MISSING' : current, stderr: '' }
+    }
+    if (/Disable-ScheduledTask/.test(script)) {
+      if (failDisable) return { ok: false, code: 1, stdout: '', stderr: 'Access is denied.' }
+      current = 'disabled'
+      return { ok: true, code: 0, stdout: 'done', stderr: '' }
+    }
+    if (/Enable-ScheduledTask/.test(script)) {
+      if (failEnable) return { ok: false, code: 1, stdout: '', stderr: 'Access is denied.' }
+      current = 'ready'
+      return { ok: true, code: 0, stdout: 'done', stderr: '' }
+    }
+    return { ok: false, code: 1, stdout: '', stderr: 'unexpected script: ' + script }
+  }
+  return { exec, calls, state: () => current }
+}
+
+const qDir = join(tmpdir(), 'vsep-quiesce-' + process.pid)
+rmSync(qDir, { recursive: true, force: true })
+mkdirSync(qDir, { recursive: true })
+const qState = join(qDir, 'quiesce.json')
+
+ok('the gate refuses to exist without a task name',
+  (() => { try { qs.createGate({}); return false } catch (e) { return /task name/.test(String(e.message)) } })())
+
+const w1 = fakeWindows()
+const st1 = await qs.readTaskState('Volcano-Separator', w1.exec)
+ok('readTaskState reports what Windows said', st1.state === 'ready', JSON.stringify(st1))
+ok('a task that is not registered reads as missing, not as not-ready',
+  (await qs.readTaskState('Nope', fakeWindows({ state: 'missing' }).exec)).state === 'missing')
+const stUnknown = await qs.readTaskState('X', async () => ({ ok: false, code: 1, stdout: '', stderr: 'Get-ScheduledTask : Access is denied.' }))
+ok('a failed query reads as unknown and keeps the reason, rather than guessing',
+  stUnknown.state === 'unknown' && /Access is denied/.test(stUnknown.why ?? ''), JSON.stringify(stUnknown))
+
+const gate1 = qs.createGate({ taskName: 'Volcano-Separator', exec: w1.exec, statePath: qState })
+const sus1 = await gate1.quiesce()
+ok('quiesce suspends and answers ok', sus1.ok === true, JSON.stringify(sus1))
+ok('it hands back a 32-byte handle', typeof sus1.handle === 'string' && sus1.handle.length === 64, String(sus1.handle?.length))
+ok('and it records the state it found', sus1.was === 'ready' && sus1.changed === true, JSON.stringify(sus1))
+ok('the fake world is now disabled', w1.state() === 'disabled', w1.state())
+ok('a pending suspension is recorded on disk', qs.readPending(qState)?.handle === sus1.handle)
+const pend1 = gate1.pending()
+ok('the report names the suspension without handing out the credential',
+  pend1?.taskName === 'Volcano-Separator' && pend1?.handlePrefix === sus1.handle.slice(0, 8) && !('handle' in pend1),
+  JSON.stringify(pend1))
+
+const sus1b = await gate1.quiesce()
+ok('a second quiesce is refused rather than re-recording the state',
+  sus1b.ok === false && sus1b.handle === sus1.handle, JSON.stringify(sus1b))
+
+const resNoHandle = await gate1.resume({})
+ok('resume without a handle is refused', resNoHandle.ok === false && /handle/.test(resNoHandle.why), JSON.stringify(resNoHandle))
+
+const resWrong = await gate1.resume({ handle: 'a'.repeat(64) })
+ok('resume with a handle that does not own the suspension is refused',
+  resWrong.ok === false && /does not own/.test(resWrong.why), JSON.stringify(resWrong))
+ok('and that refusal leaves the suspension open', gate1.pending() !== null)
+
+const res1 = await gate1.resume({ handle: sus1.handle })
+ok('resume with the right handle restores what was found', res1.ok === true && res1.restored === 'ready', JSON.stringify(res1))
+ok('the fake world is ready again', w1.state() === 'ready', w1.state())
+ok('the record on disk is cleared', qs.readPending(qState) === null)
+const resAgain = await gate1.resume({ handle: sus1.handle })
+ok('resuming twice is refused, not silently accepted', resAgain.ok === false && /nothing is suspended/.test(resAgain.why), JSON.stringify(resAgain))
+
+// The case that makes "restore" mean restore: a task the user had already turned off must not come
+// back on because a program resumed its own suspension.
+const w2 = fakeWindows({ state: 'disabled' })
+const gate2 = qs.createGate({ taskName: 'Volcano-Separator', exec: w2.exec, statePath: qState })
+const sus2 = await gate2.quiesce()
+ok('quiescing an already-disabled task needs no disable call', sus2.ok === true && sus2.changed === false, JSON.stringify(sus2))
+ok('and it says it found it disabled', sus2.was === 'disabled', JSON.stringify(sus2))
+ok('no Disable-ScheduledTask was run for it', !w2.calls.some((c) => /Disable-ScheduledTask/.test(c)), w2.calls.join(' | '))
+const res2 = await gate2.resume({ handle: sus2.handle })
+ok('resuming it does not enable it back', res2.ok === true && res2.changed === false && w2.state() === 'disabled', JSON.stringify(res2))
+ok('no Enable-ScheduledTask was run for it either', !w2.calls.some((c) => /Enable-ScheduledTask/.test(c)), w2.calls.join(' | '))
+
+// A refused change must not leave a record that says otherwise.
+const w3 = fakeWindows({ failDisable: true })
+const gate3 = qs.createGate({ taskName: 'Volcano-Separator', exec: w3.exec, statePath: qState })
+const sus3 = await gate3.quiesce()
+ok('a refused disable is reported, not thrown',
+  sus3.ok === false && /Disable-ScheduledTask failed/.test(sus3.why) && /Access is denied/.test(sus3.why), JSON.stringify(sus3))
+ok('and nothing is recorded as pending', gate3.pending() === null && qs.readPending(qState) === null)
+
+const w4 = fakeWindows({ failEnable: true })
+const gate4 = qs.createGate({ taskName: 'Volcano-Separator', exec: w4.exec, statePath: qState })
+const sus4 = await gate4.quiesce()
+const res4 = await gate4.resume({ handle: sus4.handle })
+ok('a refused enable keeps the suspension open',
+  res4.ok === false && res4.stillSuspended === true, JSON.stringify(res4))
+ok('and the record stays on disk, so the next start is not silent',
+  qs.readPending(qState)?.handle === sus4.handle)
+ok('the gate still considers itself the owner of that suspension', gate4.pending()?.since === sus4.since)
+
+rmSync(qState, { force: true })
+
+// The shutdown path: no handle, because the owner is leaving.
+const w5 = fakeWindows()
+const gate5 = qs.createGate({ taskName: 'Volcano-Separator', exec: w5.exec, statePath: qState })
+const rel0 = await gate5.releaseAll('test')
+ok('releasing nothing answers released:false rather than failing', rel0.ok === true && rel0.released === false, JSON.stringify(rel0))
+const sus5 = await gate5.quiesce()
+const rel1 = await gate5.releaseAll('test')
+ok('releasing an open suspension puts the task back', rel1.ok === true && rel1.released === true && w5.state() === 'ready', JSON.stringify(rel1))
+ok('and leaves no record behind', qs.readPending(qState) === null)
+
+const w6 = fakeWindows({ state: 'disabled' })
+const gate6 = qs.createGate({ taskName: 'Volcano-Separator', exec: w6.exec, statePath: qState })
+await gate6.quiesce()
+const rel2 = await gate6.releaseAll('test')
+ok('releasing a suspension of an already-disabled task does not enable it',
+  rel2.ok === true && w6.state() === 'disabled' && !w6.calls.some((c) => /Enable-ScheduledTask/.test(c)), JSON.stringify(rel2))
+
+const bindingsOn = qs.quiesceFunctions(gate6)
+ok('the two bindings are named the way the discovery list says', Object.keys(bindingsOn).sort().join(',') === 'volcano_quiesce,volcano_resume', Object.keys(bindingsOn).join(','))
+const toolNames = qs.quiesceTools().map((t) => t.name).sort().join(',')
+ok('and the discovery descriptors agree with them', toolNames === 'volcano_quiesce,volcano_resume', toolNames)
+ok('resume declares its handle as required',
+  qs.quiesceTools().find((t) => t.name === 'volcano_resume')?.inputSchema?.required?.includes('handle') === true)
+ok('quiesce declares no parameter at all, because the task name is not one',
+  Object.keys(qs.quiesceTools().find((t) => t.name === 'volcano_quiesce')?.inputSchema?.properties ?? {}).length === 0)
+
+const notSuspended = await bindingsOn.volcano_resume({ handle: 'x' })
+ok('the binding answers prose for a refusal as well as fields',
+  notSuspended.ok === false && /not resumed/.test(notSuspended.text), JSON.stringify(notSuspended))
+
+// The switch has to change what exists, not what a flag says. Both generation paths are checked
+// because a binding that is callable but unlisted is its own kind of lie, and so is its reverse.
+const gatedMap = qs.quiesceFunctions(gate6)
+ok('a gated binding reaches the map only when it is handed over',
+  'volcano_quiesce' in ptc.buildBindings({ gated: gatedMap })[0].functions &&
+  !('volcano_quiesce' in ptc.buildBindings()[0].functions))
+ok('and the discovery list follows the same switch',
+  ptc.exposedTools({ gatedTools: qs.quiesceTools() }).some((t) => t.name === 'volcano_quiesce') &&
+  !ptc.exposedTools().some((t) => t.name === 'volcano_quiesce'))
+ok('the default surface is unchanged at sixteen when nothing is handed over',
+  ptc.exposedTools().length === 16, String(ptc.exposedTools().length))
+
+rmSync(qDir, { recursive: true, force: true })
+
 // --- extras: external commands as bindings ---------------------------------- //
 // The core must keep knowing nothing about any other project, so these are checked with a command
 // this machine already has -- the test runner itself -- rather than with a path to someone's

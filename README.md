@@ -242,6 +242,31 @@ command and answers `{ ok, exitCode, json?, text }` — `json` only when stdout 
 always, and a non-zero exit as `ok: false` rather than an exception. It is not a sandbox: the command
 runs with your authority and the arguments the file gives it.
 
+### Suspending the heartbeat
+
+`vsep ptc --allow-quiesce` adds two more bindings, and they are the only ones that change the machine:
+`volcano_quiesce` disables this tool's scheduled task and returns a handle; `volcano_resume` takes that
+handle and puts the task back. Off by default, and the task name is not a parameter — the only task it
+can ever touch is its own heartbeat.
+
+This exists because "stop the scheduled task before touching the host" was a rule with a manual step,
+and the manual step is the one that gets forgotten at the end of a repair. A program holds the handle; a
+person reading a checklist does not.
+
+Two things it refuses to guess at. It records the state it found and restores *that*, so a task you had
+already disabled stays disabled — the other reading would let a tool call override your decision without
+telling you. And it will not release a leftover suspension automatically on the next start: the record
+says what the state was, but the world has had time to move since, and re-enabling on a guess is how a
+safety mechanism becomes the thing that switches the safety mechanism on. A leftover is reported
+instead.
+
+What it cannot do: survive its own process being force-killed. Enabling a task needs a child process,
+and a terminated one never gets to start it, so a pending suspension is written to
+`~/.volcano-separator/quiesce.json` and reported on the next start. The suite runs against an injected
+command executor and never touches a real scheduled task — a test that disabled the real heartbeat
+would be a test that changes the thing it measures. The real pair was checked once by hand: `ready` →
+`disabled` → `ready`, with the disk record cleared.
+
 MCP client config:
 
 ```json
