@@ -52,6 +52,7 @@ extras.mjs       可选外部命令绑定：--extras 指定的文件，默认不
 ui.mjs           网页：读 ui/page.html，填入 bin/panel.json 的九色与绑定列表
 quiesce.mjs      心跳的挂起与归还：--allow-quiesce 才存在，只碰自己那一个计划任务
 plugins.mjs      插件：从 plugins/*.js 的注释行读出名字、说明与依赖，页面一点就跑
+llm.mjs          一次模型调用：密钥用 DPAPI 保护，端点与模型是值而不是常量
 ```
 
 ## 数据流

@@ -325,6 +325,29 @@ there is no plugin identity to file it under.
 repository's own, for the same reason extras are a file rather than four paths: what runs reads nothing
 outside this repository, and what it offers is something a person named.
 
+### The model call
+
+`vos llm` configures and exercises one call. The key is protected with DPAPI by the same script the vault
+uses — not a config file, which would travel with every copy of this directory, and not an environment
+variable alone, which every child process inherits:
+
+```text
+vos llm set-key          # reads stdin; --key works but lands in the shell history and the process list
+vos llm status           # endpoint, model, and where the key came from -- never the key
+vos llm ask "..."        # one call, printed
+vos llm forget
+```
+
+The endpoint and model are values rather than constants: any OpenAI-shaped chat endpoint works, and
+`--llm-endpoint` / `--llm-model` override both. DeepSeek is the default because it is what this machine
+pays for, not because it is the only shape — hard-coding one host would be a choice nobody could see.
+
+A program reaches it only with `--allow-llm`, which adds one binding, `vos_ask`. That is a separate switch
+from `--allow-quiesce` on purpose: suspending a scheduled task changes this machine, and a model call
+spends money and sends the prompt off it. Failures come back classified — `no-key`, `network`, `timeout`,
+`http`, `bad-response`, `empty-prompt`, `prompt-too-long` — so a program can decide whether to retry
+instead of guessing.
+
 MCP client config:
 
 ```json

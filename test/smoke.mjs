@@ -4261,6 +4261,59 @@ rmSync(plugTokenFile, { force: true })
 
 rmSync(plugDir, { recursive: true, force: true })
 
+// --- llm: the one call that leaves this machine ------------------------------ //
+// Nothing here reaches the network, and nothing here reads the real key. A suite that spent money on every
+// run would be a suite people switch off, and the DPAPI round trip is slow enough that putting it on every
+// run would cost more than it proves -- it is asserted once by hand instead, in the CHANGELOG entry.
+section('llm')
+
+const llm = await import('../lib/llm.mjs')
+
+const noKeyCtx = { llmKeyFile: join(tmpdir(), 'vos-no-such-key-' + process.pid), llmKeyEnv: [] }
+const noKey = await llm.loadKey(noKeyCtx)
+ok('no key anywhere is a refusal that names where it looked',
+  noKey.ok === false && /no API key/.test(noKey.detail) && noKey.detail.includes('vos-no-such-key'), String(noKey.detail).slice(0, 120))
+
+const llmCtx = { llmKey: 'k'.repeat(32), llmEndpoint: 'http://127.0.0.1:9/nothing', llmTimeoutMs: 2000 }
+const llmStatus = await llm.status({ ...llmCtx, llmKeyEnv: [] })
+ok('a key given by the caller is reported as coming from the caller',
+  llmStatus.hasKey === true && llmStatus.source === 'caller', String(llmStatus.source))
+ok('and no part of the key appears in what status reports',
+  !JSON.stringify(llmStatus).includes('kkkkkkkk'), JSON.stringify(llmStatus).slice(0, 120))
+
+// The refusals that must happen before a request is built at all.
+const llmEmpty = await llm.ask(llmCtx, { prompt: '   ' })
+ok('an empty prompt never becomes a request', llmEmpty.ok === false && llmEmpty.kind === 'empty-prompt', String(llmEmpty.kind))
+const llmHuge = await llm.ask(llmCtx, { prompt: 'x'.repeat(25000) })
+ok('an oversized prompt is refused rather than truncated',
+  llmHuge.ok === false && llmHuge.kind === 'prompt-too-long', String(llmHuge.kind))
+const llmNoKey = await llm.ask({ llmKeyFile: noKeyCtx.llmKeyFile, llmKeyEnv: [] }, { prompt: 'hi' })
+ok('a call with no credential fails as no-key, not as a network error',
+  llmNoKey.ok === false && llmNoKey.kind === 'no-key', String(llmNoKey.kind))
+
+// The failure taxonomy has to separate these: a caller that cannot tell them apart cannot decide to retry.
+const llmNet = await llm.ask(llmCtx, { prompt: 'hi' })
+ok('an unreachable endpoint is a network failure rather than a crash',
+  llmNet.ok === false && llmNet.kind === 'network', String(llmNet.kind) + ' ' + String(llmNet.why).slice(0, 80))
+
+ok('a key too short to be one is refused', (await llm.saveKey({ llmKeyFile: join(tmpdir(), 'vos-nk-' + process.pid) }, 'short')).ok === false)
+ok('a key with whitespace in it is refused as a paste accident',
+  (await llm.saveKey({ llmKeyFile: join(tmpdir(), 'vos-nk-' + process.pid) }, 'a'.repeat(20) + ' bbbbbbbbbbbbb')).ok === false)
+
+// The binding follows the same switch pattern as quiesce: absent by default, present only when handed over.
+ok('the model binding is absent unless it is handed over',
+  !('vos_ask' in ptc.buildBindings()[0].functions) &&
+  'vos_ask' in ptc.buildBindings({ gated: llm.llmFunctions(llmCtx) })[0].functions)
+ok('and the discovery list follows the same switch',
+  !ptc.exposedTools().some((t) => t.name === 'vos_ask') &&
+  ptc.exposedTools({ gatedTools: llm.llmTools() }).some((t) => t.name === 'vos_ask'))
+ok('its schema requires the prompt and nothing else',
+  JSON.stringify(llm.llmTools()[0].inputSchema.required) === JSON.stringify(['prompt']))
+ok('a refusal through the binding carries prose as well as fields', await (async () => {
+  const r = await llm.llmFunctions(llmCtx).vos_ask({ prompt: 'hi' })
+  return r.ok === false && /not answered: network/.test(r.text)
+})())
+
 // --- extras: external commands as bindings ---------------------------------- //
 // The core must keep knowing nothing about any other project, so these are checked with a command
 // this machine already has -- the test runner itself -- rather than with a path to someone's

@@ -69,6 +69,17 @@ function parseArgs(argv) {
   return opts
 }
 
+/**
+ * Everything on stdin, for `llm set-key`. A key passed as an argument lands in the shell history and in
+ * the process list, which are the two places a secret should not be -- so `--key` exists, but a pipe or a
+ * prompt is the path this document points at.
+ */
+async function readAllStdin() {
+  const chunks = []
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks).toString('utf8').trim()
+}
+
 const C = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
   red: (s) => `\x1b[31m${s}\x1b[0m`,
@@ -76,6 +87,9 @@ const C = {
   yellow: (s) => `\x1b[33m${s}\x1b[0m`,
 }
 
+// No backticks anywhere in this template literal. It is a string, so one ends it early, and the syntax
+// error then points at the last line of the file rather than at the line that opened it -- three times
+// now, which is what this comment is worth.
 const HELP = `volcano-separator -- keeps uv / daemon / hindsight from being one fragile chain
 
 Usage: volcano-separator <command> [options]
@@ -178,12 +192,31 @@ Options:
                      repair of the host can actually stop it, and restore what they found afterwards.
                      Off by default. The task name is not a parameter -- it can only ever touch its own
                      heartbeat -- and an unreleased suspension is given back when the server stops.
+                     --allow-llm adds vos_ask, the one binding that sends data off this machine and costs
+                     money: one prompt in, one answer out, through whatever endpoint and model "vos llm
+                     status" reports. A separate switch from --allow-quiesce on purpose -- changing this
+                     machine and spending money are different decisions. Configure it with "vos llm
+                     set-key"; with no key every call fails as no-key rather than quietly doing nothing.
                      --plugins DIR points at a directory of plugin programs (default: the plugins/
                      directory in this repository; --plugins '' loads none). A plugin is one .js file
                      whose first comment lines are name: / description: / needs:, and whose body is a
                      program the page offers as one click. Same execution path as the editor -- no
                      second sandbox and no second binding set -- and a plugin whose needs: line names a
                      binding the server does not expose is listed greyed rather than hidden.
+  llm status         what a model call is configured to do, and whether a key is present. It prints
+                     where the key came from -- a DPAPI-protected file, or an environment variable --
+                     and never the key itself.
+  llm set-key        read a key from stdin and protect it with DPAPI, so another Windows user cannot
+                     read it and it does not travel with a copy of this directory. --key <value>
+                     works too, but a key in an argument ends up in the shell history and the process
+                     list, so a pipe or the prompt is the path this points at.
+  llm forget         remove the saved key. An environment variable still works afterwards.
+  llm ask <prompt>   one call, printed. Failures are reported by kind -- no-key, network, timeout,
+                     http, bad-response, empty-prompt, prompt-too-long -- because a caller that cannot
+                     tell them apart cannot decide whether to retry. --json carries the whole answer.
+                     The endpoint and model are values rather than constants -- --llm-endpoint,
+                     --llm-model, or the llm key in the context -- so any OpenAI-shaped chat endpoint
+                     works; hard-coding one host would be a choice nobody could see or change.
   entity <pid|path|port> <value>
                      everything known about one process, one file or one port, from every surface
                      at once. A port resolves to the pid holding it now, which is the join back to
@@ -319,6 +352,10 @@ async function main() {
       // its own watchdog should have to be asked for by name. The value is compared rather than
       // coerced, because `--allow-quiesce false` is a string and a string is truthy.
       const allowQuiesce = opts['allow-quiesce'] === true || opts['allow-quiesce'] === 'true'
+      // A second switch, because these are different decisions: suspending a scheduled task changes this
+      // machine, and a model call spends money and sends the prompt off it. A person who wants one of
+      // those should not have to accept the other.
+      const allowLlm = opts['allow-llm'] === true || opts['allow-llm'] === 'true'
       // Plugins default to the ones shipped in this repository, because those are the programs written
       // for this tool's own surface. A directory rather than a compiled-in list, for the same reason
       // extras are a file: what runs must read nothing outside this repository, and what it offers is
@@ -328,7 +365,7 @@ async function main() {
         ? join(PROJECT_DIR, 'plugins')
         : (pluginsArg ? String(pluginsArg) : null)
       const { createPtcServer, listen, DENIED } = await import('../lib/ptc.mjs')
-      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath, allowQuiesce, taskName: ctx.taskName, pluginsDir })
+      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath, allowQuiesce, allowLlm, taskName: ctx.taskName, pluginsDir })
       let addr
       try {
         addr = await listen(server, { webPort: port })
@@ -350,6 +387,8 @@ async function main() {
         console.log(C.dim(`  auth    : POST /ptc/run needs the x-vos-token header; token file ${server.ptcInfo.tokenPath}`))
         if (server.ptcInfo.quiesce) console.log(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
         else console.log(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))
+        if (server.ptcInfo.llm) console.log(C.dim('  llm     : vos_ask may call a model; the prompt leaves this machine and it costs money'))
+        else console.log(C.dim('  llm     : off -- --allow-llm lets a program call a model'))
         console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
       }
       // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an
@@ -1013,6 +1052,73 @@ async function main() {
       console.log('')
       console.log(C.dim('  the window offers ALLOW (records your decision) or RELEASE (just resumes it)'))
       break
+    }
+
+    case 'llm': {
+      // The setting rather than a capability: status / set-key / forget / ask. `ask` lives here so that
+      // "does this key actually work" is one command instead of a script, and so the first request that
+      // costs money is made by a person who is watching.
+      const llmMod = await import('../lib/llm.mjs')
+      const sub = String(opts._[1] ?? 'status').toLowerCase()
+
+      if (sub === 'status') {
+        const s = await llmMod.status(ctx)
+        if (opts.json) return emit(s)
+        console.log('llm')
+        console.log(`  ${'endpoint'.padEnd(10)} ${s.endpoint}`)
+        console.log(`  ${'model'.padEnd(10)} ${s.model}`)
+        console.log(`  ${'key file'.padEnd(10)} ${s.keyFile}`)
+        console.log(`  ${'key'.padEnd(10)} ` + (s.hasKey ? C.green('present') + C.dim(' -- ' + s.source) : C.yellow('absent') + C.dim(' -- ' + s.detail)))
+        return
+      }
+
+      if (sub === 'set-key') {
+        let raw = typeof opts.key === 'string' ? opts.key : null
+        if (!raw) {
+          if (process.stdin.isTTY) process.stderr.write('paste the API key, then press Enter: ')
+          raw = await readAllStdin()
+        }
+        const saved = await llmMod.saveKey(ctx, raw)
+        if (opts.json) return emit({ ok: saved.ok, path: saved.path, detail: saved.detail })
+        if (!saved.ok) {
+          console.error(C.red('FAIL') + ': ' + saved.detail)
+          process.exit(1)
+        }
+        console.log(C.green('ok') + ' key saved to ' + saved.path)
+        console.log(C.dim('  protected with DPAPI: another Windows user cannot read it, and it does not travel with a copy of this directory'))
+        return
+      }
+
+      if (sub === 'forget') {
+        const r = llmMod.forgetKey(ctx)
+        if (opts.json) return emit(r)
+        if (!r.ok) {
+          console.error(C.red('FAIL') + ': ' + r.detail)
+          process.exit(1)
+        }
+        console.log(C.green('ok') + ' removed ' + r.path)
+        return
+      }
+
+      if (sub === 'ask') {
+        const prompt = opts._.slice(2).join(' ')
+        const a = await llmMod.ask(ctx, { prompt })
+        if (opts.json) return emit(a)
+        if (!a.ok) {
+          console.error(C.red('FAIL') + ': ' + a.kind + ' -- ' + a.why)
+          process.exit(2)
+        }
+        console.log(a.text)
+        console.log('')
+        const modelTag = a.model === a.requested ? a.model : `${a.requested} -> ${a.model}`
+        console.log(C.dim(`  ${modelTag}  ${a.ms} ms  key: ${a.askedBy}` + (a.usage ? '  ' + JSON.stringify(a.usage) : '')))
+        return
+      }
+
+      const detail = `unknown llm subcommand: ${sub} (status | set-key | forget | ask)`
+      if (opts.json) return emit({ ok: false, detail })
+      console.error(C.red('FAIL') + ': ' + detail)
+      process.exit(1)
     }
 
     case 'entity': {

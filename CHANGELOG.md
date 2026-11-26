@@ -4,6 +4,40 @@
 
 ### Added
 
+- **`vos llm` and `vos_ask`: one model call, configured rather than assumed.** The tool could describe a
+  machine but never ask anything about it, so "have a model look at this" was a script somebody kept
+  rewriting. It is now four subcommands — status, set-key, forget, ask — plus one binding behind
+  `--allow-llm` on the ptc surface.
+  - **The endpoint and model are values, not constants.** This repository's own TODO has said since
+    2026-10-06 that it must not be built for one LLM only. That was written about what this tool
+    supervises, and it applies here for a plainer reason: every provider that speaks the OpenAI chat shape
+    is the same request, so hard-coding one host would be a choice nobody could see and nobody could
+    change. DeepSeek is the default because it is what this machine already pays for.
+  - **The key is protected with DPAPI, through the script the vault already uses.** Not a config file,
+    which travels with every copy of the directory; and not an environment variable alone, which every
+    child process inherits. `vos llm set-key` reads from stdin, because a key passed as an argument ends
+    up in the shell history and in the process list.
+  - **Two rounds of this were wrong before they were right, and running it is what showed both.** The
+    script speaks **base64** on both sides (`FromBase64String` on the way in), so a plain key failed
+    inside PowerShell with a message about the input rather than about the key; and a refusal is reported
+    as one JSON line on **stdout** with exit 1, so reading only the exit code produced
+    `protect failed: no detail`. The first is now a comment where the value is written, the second a
+    `lastJson` both callers use — the same shape `crypt.mjs` already had and this module did not.
+  - **Failures are classified, not concatenated**: `no-key`, `network`, `timeout`, `http`,
+    `bad-response`, `empty-prompt`, `prompt-too-long`. A caller that cannot tell a timeout from a refused
+    connection cannot decide whether to retry — the same reasoning that produced the taxonomy on the
+    program runner.
+  - **An empty or oversized prompt never becomes a request**, and a key that is too short or contains
+    whitespace is refused rather than saved. A stored value that is wrong is worse than none, because it
+    looks like the setting is done.
+  - **`vos_ask` is its own switch**, separate from `--allow-quiesce`: suspending a scheduled task changes
+    this machine, and a model call spends money and sends the prompt off it. Wanting one should not mean
+    accepting the other.
+  - Verified against the real API — 566 ms through an environment key, then the same key saved under DPAPI
+    and 443 ms through the file. The suite never reaches the network and never reads the real key: it
+    supplies one as a value and points the endpoint at a closed port, because a suite that spends money on
+    every run is a suite people switch off.
+
 - **`vos ptc`: one request carries a program, and the program sequences the read-only tools.** The
   MCP surface answers one tool per round trip, which puts a repair that is really "check, act, check
   again" into the caller's head. A program puts the sequencing where it can be read and tested:
