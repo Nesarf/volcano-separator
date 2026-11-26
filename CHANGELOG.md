@@ -4,7 +4,7 @@
 
 ### Added
 
-- **`vsep ptc`: one request carries a program, and the program sequences the read-only tools.** The
+- **`vos ptc`: one request carries a program, and the program sequences the read-only tools.** The
   MCP surface answers one tool per round trip, which puts a repair that is really "check, act, check
   again" into the caller's head. A program puts the sequencing where it can be read and tested:
 
@@ -28,7 +28,7 @@
   - Opening `/` is the same surface with a face — binding list, program editor, last run underneath —
     drawn with the nine roles from `bin/panel.json` read at request time, so the page and the chamber's
     window cannot disagree about what this tool looks like.
-  - **`POST /ptc/run` needs `content-type: application/json` and an `x-vsep-token` header** whose value
+  - **`POST /ptc/run` needs `content-type: application/json` and an `x-vos-token` header** whose value
     is in `~/.volcano-separator/ptc.token` (written on first start, `--token-file` to move it). `GET`
     routes stay open so a caller can learn the surface before it holds the credential. `OPTIONS` is
     answered 405 and no response carries an `Access-Control-*` header.
@@ -103,7 +103,7 @@
     every other file, and presence is checked at runtime instead of in `needs:`.
     - Its first real run found **two defects, and neither was in the plugin**. The plugin dropped
       `stderr`, so nanodesu's refusal arrived as `ok: false` with nothing beside it — a silent failure.
-      And `vsep-extras.json` had been passing `--json` to all three nanodesu bindings, which have no such
+      And `vos-extras.json` had been passing `--json` to all three nanodesu bindings, which have no such
       option, so every one of them had been answering with a bare argparse usage error since the file was
       written. Nothing had ever called them.
     - **Wiring that is never used is wiring nobody can vouch for.** "The contract is right" and "it
@@ -139,7 +139,7 @@
     processes already running as this user — and the live suspension is reported apart from a leftover
     one, because one of those needs resuming and the other needs a person.
 
-- **`vsep ptc --extras <path>`: external commands as bindings, and only when a file names them.**
+- **`vos ptc --extras <path>`: external commands as bindings, and only when a file names them.**
   Without the flag they do not exist, and the built-in sixteen are the whole surface. A file rather
   than a handful of hardcoded paths, because *origin* and *dependency* are different things: a resource
   may be produced in another checkout as long as what runs reads nothing outside its own repository. A
@@ -179,6 +179,25 @@
     path, and the code records why the narrow reader is the wrong source so nobody switches back.
 
 ### Changed
+
+- **The short name is `vos`.** It was `vsep`, which only read as "volcano separator" if you already knew
+  that it did. The command is `vos`; the package is still `volcano-separator`, and the repository keeps
+  its name.
+  - **Everything that carried the old name moved with it**, not only the command: the extras format
+    marker (`vos-extras/1`), the plugin format marker (`vos-plugin/1`), the request header
+    (`x-vos-token`), the page's `<meta>` name, the `localStorage` prefix that keeps a plugin's last
+    result, and the `VOS_POWERSHELL` environment variable. Half a rename leaves two names for one thing,
+    which is a defect this project has already paid for once; the cost of finishing it is one line in a
+    file outside the repository, not a design question.
+  - **Two things break for anyone who had them configured**: `VSEP_POWERSHELL` is now `VOS_POWERSHELL`,
+    and an extras file whose `format` says `vsep-extras/1` is refused rather than guessed at. This
+    machine's own extras file was renamed and its marker updated, with a note in it saying what changed
+    and why.
+  - **The rename was scripted, in three case forms** (`vsep`, `Vsep`, `VSEP`), and the first pass left
+    `.html` out — so the page went on sending `vsep-token` while the test names had already moved. Two
+    assertions caught it. That is the whole value of a test that spells the expected name out: without
+    them the page would have kept a header the server no longer reads, and the first symptom would have
+    been a 401 on somebody's click.
 
 - **The detection rules are a table (`lib/rules.mjs`) with a readable copy (`RULES.md`), and the gate
   now reports them one by one.** The gate could previously say "no ask has fired" and nothing more,
@@ -517,7 +536,7 @@
     that `readJsonLoose` exists for, the missing `AesGcm` that shaped the encryption split (Node does
     the crypto, PowerShell does DPAPI), and the missing `ResolveLinkTarget` that made
     `resolve-path.ps1` use `GetFinalPathNameByHandle`.
-  - The choice is one function, overridable through `VSEP_POWERSHELL`, and a check fails if any other
+  - The choice is one function, overridable through `VOS_POWERSHELL`, and a check fails if any other
     module names the interpreter -- verified to fail on a planted name. `activity.mjs` had one more
     than the call sites: the scheduled task's VBS launcher wrote `powershell.exe` into a script that
     runs as SYSTEM, so a tool that changed its interpreter would have left the recorder on the other
@@ -753,8 +772,8 @@
     directory override the summary was written to one place and looked for in another, and a freeze
     that had worked perfectly read as "detain produced no summary". `isolate.ps1` already declared it.
 - **The suite leaked two scratch directories per run, and had been for a while.** 248 of them had
-  accumulated in the temp tree the tool derives its own state from -- `vsep-both-*` (created and never
-  removed; the section deleted the other directory it had made and moved on) and `vsep-junc-tmp-*`
+  accumulated in the temp tree the tool derives its own state from -- `vos-both-*` (created and never
+  removed; the section deleted the other directory it had made and moved on) and `vos-junc-tmp-*`
   (the TEMP redirect added when the junction test stopped writing into the live record). Verified
   stable afterwards: the count does not change across runs.
   - Same lesson as the pollution fix, one level down: cleaning up "the paths you remember" is how a

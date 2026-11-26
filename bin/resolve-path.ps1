@@ -30,14 +30,14 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-if (-not ('VsepPathResolve' -as [type])) {
+if (-not ('VosPathResolve' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
-public static class VsepPathResolve {
+public static class VosPathResolve {
     const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;   // needed to open a directory
     const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
     const uint OPEN_EXISTING = 3;
@@ -71,7 +71,7 @@ public static class VsepPathResolve {
 
 $out = @{ ok = $false; path = $Path; resolved = $null; why = $null }
 try {
-    $r = [VsepPathResolve]::Resolve($Path)
+    $r = [VosPathResolve]::Resolve($Path)
     if ($r) {
         $out.ok = $true
         $out.resolved = $r

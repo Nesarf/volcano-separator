@@ -1,7 +1,7 @@
 {
-  "format": "vsep-extras/1",
+  "format": "vos-extras/1",
   "_note": [
-    "External commands exposed to a program as extra bindings. Load with `vsep ptc --extras <path>`.",
+    "External commands exposed to a program as extra bindings. Load with `vos ptc --extras <path>`.",
     "Without the flag the built-in sixteen are the whole surface; this file is the only way anything",
     "else gets in, because these commands run with your authority and naming them is a decision.",
     "",

@@ -122,7 +122,7 @@ section('custody')
   const { tmpdir } = await import('node:os')
   // Imported here rather than relying on the later top-level import: this section runs before it.
   const g = await import('../lib/core.mjs')
-  const dir = mkdtempSync(join(tmpdir(), 'vsep-custody-'))
+  const dir = mkdtempSync(join(tmpdir(), 'vos-custody-'))
   const activity = join(dir, 'activity')
   mkdirSync(activity, { recursive: true })
   const day = 'activity-2000-01-01.ndjson'
@@ -199,7 +199,7 @@ section('custody alerts')
   const { tmpdir } = await import('node:os')
   const g2 = await import('../lib/core.mjs')
 
-  const dir = mkdtempSync(join(tmpdir(), 'vsep-alert-'))
+  const dir = mkdtempSync(join(tmpdir(), 'vos-alert-'))
   const activity = join(dir, 'activity')
   mkdirSync(activity, { recursive: true })
   const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
@@ -280,7 +280,7 @@ section('unrecorded custody')
   const { tmpdir } = await import('node:os')
   const g3 = await import('../lib/core.mjs')
 
-  const dir = mkdtempSync(join(tmpdir(), 'vsep-unrec-'))
+  const dir = mkdtempSync(join(tmpdir(), 'vos-unrec-'))
   const activity = join(dir, 'activity')
   mkdirSync(activity, { recursive: true })
   const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
@@ -356,7 +356,7 @@ section('unrecorded custody')
   // A fresh directory for the next assertion. The alert above armed the one-hour throttle, and
   // asserting on a throttled response would test the throttle rather than the thing under test --
   // which is exactly how this check first failed.
-  const dir2 = mkdtempSync(join(tmpdir(), 'vsep-both-'))
+  const dir2 = mkdtempSync(join(tmpdir(), 'vos-both-'))
   const activity2 = join(dir2, 'activity')
   mkdirSync(activity2, { recursive: true })
   writeFileSync(join(activity2, day), JSON.stringify({
@@ -402,7 +402,7 @@ section('release notices')
   const { tmpdir } = await import('node:os')
   const g4 = await import('../lib/core.mjs')
 
-  const dir = mkdtempSync(join(tmpdir(), 'vsep-rel-'))
+  const dir = mkdtempSync(join(tmpdir(), 'vos-rel-'))
   const activity = join(dir, 'activity')
   mkdirSync(activity, { recursive: true })
   const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
@@ -453,7 +453,7 @@ section('release notices')
   // A process still frozen must not produce a release notice.
   const frozenFn = async (pids) => Object.fromEntries(pids.map((p) => [p,
     { pid: p, exists: true, name: 'cmd.exe', threads: 4, suspended: 4, frozen: true, created: t1 }]))
-  const dir2 = mkdtempSync(join(tmpdir(), 'vsep-rel2-'))
+  const dir2 = mkdtempSync(join(tmpdir(), 'vos-rel2-'))
   mkdirSync(join(dir2, 'activity'), { recursive: true })
   writeFileSync(join(dir2, 'activity', day), JSON.stringify({
     t: t1, kind: 'detain', action: 'suspended', pid: 6666, name: 'cmd.exe', created: t1,
@@ -479,7 +479,7 @@ section('custody timeline')
   const { tmpdir } = await import('node:os')
   const g5 = await import('../lib/core.mjs')
 
-  const dir = mkdtempSync(join(tmpdir(), 'vsep-tl-'))
+  const dir = mkdtempSync(join(tmpdir(), 'vos-tl-'))
   const activity = join(dir, 'activity')
   mkdirSync(activity, { recursive: true })
   const day = 'activity-' + new Date().toISOString().slice(0, 10) + '.ndjson'
@@ -1620,8 +1620,8 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('isolation')
   const enf = await import('../lib/enforce.mjs')
   const g = await import('../lib/core.mjs')
-  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-acl-' + process.pid), logDir: join(tmpdir(), 'vsep-acl-log-' + process.pid) }
-  const scratch = join(tmpdir(), 'vsep-iso-' + process.pid)
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vos-acl-' + process.pid), logDir: join(tmpdir(), 'vos-acl-log-' + process.pid) }
+  const scratch = join(tmpdir(), 'vos-iso-' + process.pid)
   mkdirSync(scratch, { recursive: true })
   const target = join(scratch, 'thing.exe')
   writeFileSync(target, 'not really a binary')
@@ -1699,8 +1699,8 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('journal authenticity')
   const enf = await import('../lib/enforce.mjs')
   const g = await import('../lib/core.mjs')
-  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-journal-' + process.pid), logDir: join(tmpdir(), 'vsep-journal-log-' + process.pid) }
-  const scratch = join(tmpdir(), 'vsep-ja-' + process.pid)
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vos-journal-' + process.pid), logDir: join(tmpdir(), 'vos-journal-log-' + process.pid) }
+  const scratch = join(tmpdir(), 'vos-ja-' + process.pid)
   mkdirSync(scratch, { recursive: true })
 
   if (process.platform !== 'win32') {
@@ -1871,7 +1871,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // A scratch file, not the real one. The first version of this test deleted the accumulated
   // evidence at the end -- so running the suite wiped exactly the data the suite exists to
   // protect, and the two-week accumulation plan would have been reset by every green run.
-  const evFile = join(tmpdir(), 'vsep-evidence-' + process.pid + '.ndjson')
+  const evFile = join(tmpdir(), 'vos-evidence-' + process.pid + '.ndjson')
   rmSync(evFile, { force: true })
   const ectx = { ...ctx, evidenceFile: evFile }
   const before = g.readEvidence(ectx).length
@@ -1915,8 +1915,8 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('isolation live state')
   const enf = await import('../lib/enforce.mjs')
   const g = await import('../lib/core.mjs')
-  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vsep-live-' + process.pid), logDir: join(tmpdir(), 'vsep-live-log-' + process.pid) }
-  const scratch = join(tmpdir(), 'vsep-lv-' + process.pid)
+  const ctx = { ...g.resolveContext({}), isolationJournalDir: join(tmpdir(), 'vos-live-' + process.pid), logDir: join(tmpdir(), 'vos-live-log-' + process.pid) }
+  const scratch = join(tmpdir(), 'vos-lv-' + process.pid)
   mkdirSync(scratch, { recursive: true })
 
   if (process.platform !== 'win32') {
@@ -1965,7 +1965,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('in-place encryption')
   const cry = await import('../lib/crypt.mjs')
   const g = await import('../lib/core.mjs')
-  const base = join(tmpdir(), 'vsep-cry-' + process.pid)
+  const base = join(tmpdir(), 'vos-cry-' + process.pid)
   mkdirSync(base, { recursive: true })
   const ctx = {
     ...g.resolveContext({}),
@@ -2044,7 +2044,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   // left "released pid ..." rows in the evidence this tool exists to keep honest, and a half-written
   // last line in that record made the recorder look stale. A test that pollutes the artifact it is
   // meant to protect fails in the direction nobody checks.
-  const scratch = join(tmpdir(), 'vsep-release-' + process.pid)
+  const scratch = join(tmpdir(), 'vos-release-' + process.pid)
   rmSync(scratch, { recursive: true, force: true })
   const ctx = { ...g.resolveContext({}), logDir: scratch }
 
@@ -2103,7 +2103,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     const { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, copyFileSync, appendFileSync } = await import('node:fs')
     const { createHash } = await import('node:crypto')
 
-    const base = join(tmpdir(), 'vsep-vault-' + process.pid)
+    const base = join(tmpdir(), 'vos-vault-' + process.pid)
     rmSync(base, { recursive: true, force: true })
     mkdirSync(base, { recursive: true })
     // A store and a key of its own, so the test never touches the machine's real vault.
@@ -2214,7 +2214,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   {
     const g = await import('../lib/core.mjs')
     const { mkdirSync, writeFileSync } = await import('node:fs')
-    const dir = join(tmpdir(), 'vsep-unreadable-' + process.pid)
+    const dir = join(tmpdir(), 'vos-unreadable-' + process.pid)
     rmSync(dir, { recursive: true, force: true })
     const now = new Date().toISOString()
     {
@@ -2899,13 +2899,13 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   // The override exists so the choice can be tested without editing code, and is read from the
   // environment rather than being a second hardcoded answer.
-  const saved = process.env.VSEP_POWERSHELL
-  process.env.VSEP_POWERSHELL = 'pwsh'
+  const saved = process.env.VOS_POWERSHELL
+  process.env.VOS_POWERSHELL = 'pwsh'
   ok('and it can be overridden from the environment',
     process.platform === 'win32' ? plat.powershellHost() === 'pwsh' : true,
     String(plat.powershellHost()))
-  if (saved === undefined) delete process.env.VSEP_POWERSHELL
-  else process.env.VSEP_POWERSHELL = saved
+  if (saved === undefined) delete process.env.VOS_POWERSHELL
+  else process.env.VOS_POWERSHELL = saved
 
   // No other module may name the interpreter. This is the check that keeps the decision in one place,
   // and it fails the moment somebody writes the name into a new call site.
@@ -3102,7 +3102,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     // Its home comes from an environment variable, which is what the layout resolver only looked for
     // at the top level -- true only while there was one descriptor.
     const savedHome = process.env.DSH_HOME
-    process.env.DSH_HOME = join(tmpdir(), 'vsep-dshhome-' + process.pid)
+    process.env.DSH_HOME = join(tmpdir(), 'vos-dshhome-' + process.pid)
     const dp = svc.resolveServicePaths(dsh, { profile: 'web' })
     ok('a descriptor whose home comes from the environment resolves to that environment',
       dp.serviceHome === process.env.DSH_HOME, `${dp.serviceHome} vs ${process.env.DSH_HOME}`)
@@ -3245,7 +3245,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   section('policy integrity')
   const g = await import('../lib/core.mjs')
   const base = g.resolveContext({})
-  const dir = join(tmpdir(), 'vsep-policy-' + process.pid)
+  const dir = join(tmpdir(), 'vos-policy-' + process.pid)
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'policy.json')
   const ctx = { ...base, policyFile: file }
@@ -3295,7 +3295,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 {
   section('recovery lock')
   const L = await import('../lib/lock.mjs')
-  const dir = join(tmpdir(), 'vsep-lock-' + process.pid)
+  const dir = join(tmpdir(), 'vos-lock-' + process.pid)
   rmSync(dir, { recursive: true, force: true })
   const ctx = { lockDir: dir }
 
@@ -3366,10 +3366,10 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
     // one of the four situations a socket probe cannot tell apart.
     const { join } = await import('node:path')
     const { homedir } = await import('node:os')
-    const f = join(homedir(), '.hindsight', 'profiles', 'vsep-probe-test.env')
+    const f = join(homedir(), '.hindsight', 'profiles', 'vos-probe-test.env')
     writeFileSync(f, 'HINDSIGHT_API_DATABASE_URL=postgresql://hindsight:wrongpassword@127.0.0.1:5432/hindsight\n')
     try {
-      const bad = await d.probeDatabaseQuery({ ...ctx, profile: 'vsep-probe-test' })
+      const bad = await d.probeDatabaseQuery({ ...ctx, profile: 'vos-probe-test' })
       ok('a database that refuses the query is reported as refused, not as listening',
         bad.ok === false && bad.checked === true && bad.level === 'query', JSON.stringify(bad.detail))
       ok('and the reason is legible rather than the console code page decoded as UTF-8',
@@ -3526,7 +3526,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 {
   section('recorder health')
   const g = await import('../lib/core.mjs')
-  const dir = join(tmpdir(), 'vsep-rechealth-' + process.pid)
+  const dir = join(tmpdir(), 'vos-rechealth-' + process.pid)
   const act = join(dir, 'activity')
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(act, { recursive: true })
@@ -3624,7 +3624,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 {
   section('transcript naming')
   const g = await import('../lib/core.mjs')
-  const dir = join(tmpdir(), 'vsep-logs-' + process.pid)
+  const dir = join(tmpdir(), 'vos-logs-' + process.pid)
   rmSync(dir, { recursive: true, force: true })
   const ctx = { ...g.resolveContext({}), logDir: dir }
 
@@ -3665,7 +3665,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 {
   section('path identity')
   const { spawnSync } = await import('node:child_process')
-  const base = join(tmpdir(), 'vsep-junc-' + process.pid)
+  const base = join(tmpdir(), 'vos-junc-' + process.pid)
   const link = join(base, 'innocent-link')
   rmSync(base, { recursive: true, force: true })
   mkdirSync(join(base, 'real'), { recursive: true })
@@ -3708,7 +3708,7 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
       // override covers both sides. Without it a test run leaves its own ACL refusals in the
       // machine's activity record -- which is the artifact this tool exists to keep honest, and the
       // suite was writing to it every time it ran.
-      const scratchTmp = join(tmpdir(), 'vsep-junc-tmp-' + process.pid)
+      const scratchTmp = join(tmpdir(), 'vos-junc-tmp-' + process.pid)
       mkdirSync(scratchTmp, { recursive: true })
       const r = spawnSync(process.execPath, [cli, '--json', 'isolate', viaLink], {
         encoding: 'utf8',
@@ -3800,7 +3800,7 @@ const PTC_PORT = 3251
 // A token file inside the test's own directory. Given as a path rather than left to the default so
 // the suite never reads or writes the one under the user's home -- a test that shares a credential
 // with the running installation is a test that can be broken by using the thing it is testing.
-const ptcTokenFile = join(tmpdir(), 'vsep-smoke-token-' + process.pid + '.txt')
+const ptcTokenFile = join(tmpdir(), 'vos-smoke-token-' + process.pid + '.txt')
 rmSync(ptcTokenFile, { force: true })
 const ptcSrv = ptc.createPtcServer({ webPort: PTC_PORT, tokenPath: ptcTokenFile })
 const ptcAddr = await ptc.listen(ptcSrv, { webPort: PTC_PORT })
@@ -3835,7 +3835,7 @@ function ptcGet(path) {
  * requests, and only the first one tests the branch that a browser page would take.
  */
 function ptcPost(path, obj, overrides = {}) {
-  const h = { 'content-type': 'application/json', 'x-vsep-token': ptcToken, ...overrides }
+  const h = { 'content-type': 'application/json', 'x-vos-token': ptcToken, ...overrides }
   for (const k of Object.keys(h)) if (h[k] === null) delete h[k]
   return ptcRaw('POST', path, h, JSON.stringify(obj))
 }
@@ -3863,15 +3863,15 @@ ok('and the body names the failure kind', JSON.parse(ptcBad.body).error?.kind ==
 // file, so the token is not a border between local processes. It is there to keep a page on another
 // origin out, and the *shape* checks next to it are the part that does most of that work -- a browser
 // cannot send a JSON post with a custom header without a preflight this server refuses to answer.
-const ptcNoToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vsep-token': null })
+const ptcNoToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vos-token': null })
 ok('POST without the token is refused', ptcNoToken.status === 401, String(ptcNoToken.status))
 ok('and the answer names the header, so a caller can fix it',
-  /x-vsep-token/.test(ptcNoToken.body), ptcNoToken.body.slice(0, 160))
+  /x-vos-token/.test(ptcNoToken.body), ptcNoToken.body.slice(0, 160))
 
-const ptcWrongToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vsep-token': 'a'.repeat(64) })
+const ptcWrongToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vos-token': 'a'.repeat(64) })
 ok('POST with a wrong token of the right length is refused', ptcWrongToken.status === 401, String(ptcWrongToken.status))
 
-const ptcShortToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vsep-token': 'a' })
+const ptcShortToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vos-token': 'a' })
 ok('a shorter guess is refused rather than throwing out of the comparison',
   ptcShortToken.status === 401, String(ptcShortToken.status))
 
@@ -3885,7 +3885,7 @@ ok('and carries no Access-Control header',
   !Object.keys(ptcOptions.headers).some((k) => k.toLowerCase().startsWith('access-control-')),
   JSON.stringify(ptcOptions.headers))
 
-const ptcGoodHeaders = await ptcRaw('POST', '/ptc/run', { 'content-type': 'application/json', 'x-vsep-token': ptcToken }, JSON.stringify({ program: 'return 1' }))
+const ptcGoodHeaders = await ptcRaw('POST', '/ptc/run', { 'content-type': 'application/json', 'x-vos-token': ptcToken }, JSON.stringify({ program: 'return 1' }))
 ok('the same route still answers when both ingredients are present', ptcGoodHeaders.status === 200, String(ptcGoodHeaders.status))
 ok('and that answer carries no Access-Control header either',
   !Object.keys(ptcGoodHeaders.headers).some((k) => k.toLowerCase().startsWith('access-control-')),
@@ -3898,11 +3898,11 @@ ok('and that answer carries no Access-Control header either',
 // script reads the token from that name, not from a literal.
 const ptcPageToken = await ptcGet('/')
 ok('the page carries the token for its own script', ptcPageToken.body.includes(ptcToken))
-ok('under the meta name the script looks up', /<meta name="vsep-token" content="/.test(ptcPageToken.body))
+ok('under the meta name the script looks up', /<meta name="vos-token" content="/.test(ptcPageToken.body))
 
 const ptcJsonAuth = await ptcGet('/ptc')
 const ptcJsonAuthBody = JSON.parse(ptcJsonAuth.body)
-ok('GET /ptc reports the credential scheme', ptcJsonAuthBody.auth?.header === 'x-vsep-token', ptcJsonAuth.body.slice(0, 200))
+ok('GET /ptc reports the credential scheme', ptcJsonAuthBody.auth?.header === 'x-vos-token', ptcJsonAuth.body.slice(0, 200))
 ok('it names the file a caller has to read', ptcJsonAuthBody.auth?.tokenFile === ptcTokenFile, String(ptcJsonAuthBody.auth?.tokenFile))
 ok('and it does not carry the value it tells you to go read', !ptcJsonAuth.body.includes(ptcToken))
 
@@ -3969,7 +3969,7 @@ function fakeWindows({ state = 'ready', failDisable = false, failEnable = false 
   return { exec, calls, state: () => current }
 }
 
-const qDir = join(tmpdir(), 'vsep-quiesce-' + process.pid)
+const qDir = join(tmpdir(), 'vos-quiesce-' + process.pid)
 rmSync(qDir, { recursive: true, force: true })
 mkdirSync(qDir, { recursive: true })
 const qState = join(qDir, 'quiesce.json')
@@ -4150,7 +4150,7 @@ ok('and it names the bindings it is missing',
 ok('a plugin that needs nothing is runnable either way',
   narrow.find((p) => p.id === 'patrol')?.runnable === true)
 
-const plugDir = join(tmpdir(), 'vsep-plugin-smoke-' + process.pid)
+const plugDir = join(tmpdir(), 'vos-plugin-smoke-' + process.pid)
 rmSync(plugDir, { recursive: true, force: true })
 mkdirSync(plugDir, { recursive: true })
 writeFileSync(join(plugDir, 'twice.js'), '// name: twice\n// description: one plus one\nreturn { n: 1 + 1 }\n')
@@ -4194,7 +4194,7 @@ ok('a returned object carrying an undefined field is invalid output, not silentl
   argUndef.error?.kind === 'invalid-output', JSON.stringify(argUndef).slice(0, 120))
 
 const plugPort = 3257
-const plugTokenFile = join(tmpdir(), 'vsep-plugin-token-' + process.pid + '.txt')
+const plugTokenFile = join(tmpdir(), 'vos-plugin-token-' + process.pid + '.txt')
 rmSync(plugTokenFile, { force: true })
 const plugSrv = ptc.createPtcServer({
   webPort: plugPort,
@@ -4211,7 +4211,7 @@ const plugToken = readFileSync(plugTokenFile, 'utf8').trim()
 const plugPost = async (body) => {
   const r = await fetch(`http://127.0.0.1:${plugPort}/ptc/run`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-vsep-token': plugToken },
+    headers: { 'content-type': 'application/json', 'x-vos-token': plugToken },
     body: JSON.stringify(body),
   })
   return r.json()
@@ -4244,7 +4244,7 @@ try {
 }
 ok('the page script parses as JavaScript', pageScriptError === null, pageScriptError ?? '')
 ok('the script keeps a per-plugin result and repaints it at load',
-  /vsep\.last\./.test(plugPage) && /paintLast\(\)/.test(plugPage))
+  /vos\.last\./.test(plugPage) && /paintLast\(\)/.test(plugPage))
 ok('it reads a badge before treating the click as a run', /closest\('\.last'\)/.test(plugPage))
 ok('and confirms before the program reaches the editor',
   plugPage.indexOf('window.confirm') < plugPage.indexOf('program.value = found.program'))
@@ -4259,12 +4259,12 @@ rmSync(plugDir, { recursive: true, force: true })
 // checkout. What is asserted is the contract: load, validate, refuse a collision, run, parse.
 section('extras')
 
-const extrasDir = join(tmpdir(), 'vsep-extras-' + process.pid)
+const extrasDir = join(tmpdir(), 'vos-extras-' + process.pid)
 rmSync(extrasDir, { recursive: true, force: true })
 mkdirSync(extrasDir, { recursive: true })
 const goodExtras = join(extrasDir, 'good.json')
 writeFileSync(goodExtras, JSON.stringify({
-  format: 'vsep-extras/1',
+  format: 'vos-extras/1',
   bindings: [
     {
       name: 'echo_json',
@@ -4297,7 +4297,7 @@ ok('a wrong format is refused, with the reason', extras.loadExtras(badFormat).pr
 
 const badEntry = join(extrasDir, 'bad-entry.json')
 writeFileSync(badEntry, JSON.stringify({
-  format: 'vsep-extras/1',
+  format: 'vos-extras/1',
   bindings: [{ name: 'not an identifier', command: 'x' }, { name: 'ok_one', command: 'x' }],
 }))
 const badLoaded = extras.loadExtras(badEntry)

@@ -71,7 +71,7 @@ The CLI switch is `--web-port` for the same reason `--port` is left alone: `--po
 recovery looks for.
 
 **What landed on 2026-11-27, and the three defects that only showed up while landing it.** The
-programmatic surface (`vsep ptc`, `lib/ptc.mjs`) answers `GET /ptc/bindings` and `POST /ptc/run`, and
+programmatic surface (`vos ptc`, `lib/ptc.mjs`) answers `GET /ptc/bindings` and `POST /ptc/run`, and
 its bindings are generated from the same `TOOLS` the MCP server publishes -- which is why the tool
 surface moved out of `lib/mcp.mjs` into `lib/tools.mjs` instead of being copied. `mcp.mjs` keeps the
 stdio loop and re-exports, so nothing that imported it broke.
@@ -470,7 +470,7 @@ feature work; it is the parts no assertion in this repository can reach.
   Two real defects surfaced on that first run, and **neither was in the plugin**:
   - the plugin itself dropped `stderr`, so nanodesu's refusal arrived as `ok: false` with nothing beside
     it — a silent failure, which is precisely what this tool exists to remove;
-  - `vsep-extras.json` passed `--json` to all three nanodesu bindings, and nanodesu has no such option.
+  - `vos-extras.json` passed `--json` to all three nanodesu bindings, and nanodesu has no such option.
     Every one of them had been answering with a bare argparse usage error since the file was written,
     because **nothing had ever called them**. `--plain` is a global flag and must come before the
     subcommand. Corrected, it now answers with its own judgement: `not a PyInstaller archive (no MEI
@@ -503,4 +503,4 @@ feature work; it is the parts no assertion in this repository can reach.
 
 `mcp.mjs` does not expose the quiesce bindings, and will not by this route: an MCP surface loaded by the
 host should not be able to suspend the heartbeat that keeps the host's own chain alive. The switch lives
-only on `vsep ptc --allow-quiesce`, which is started by a person.
+only on `vos ptc --allow-quiesce`, which is started by a person.

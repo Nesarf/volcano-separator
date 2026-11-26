@@ -154,7 +154,7 @@ $script:lastPainted = $null
 $script:gone = $false
 
 $procinfo = Join-Path $PSScriptRoot 'procinfo.ps1'
-$tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("vsep-chamber-" + $PID)
+$tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("vos-chamber-" + $PID)
 
 function Read-Tier {
     param([string]$Tier, [string]$File)

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>volcano-separator -- ptc</title>
 <!-- the token for POST /ptc/run; filled in at request time, read by the script below -->
-<meta name="vsep-token" content="{{TOKEN}}">
+<meta name="vos-token" content="{{TOKEN}}">
 <style>
 /* palette — replaced at request time with the nine roles read from bin/panel.json */
 :root {
@@ -207,7 +207,7 @@ return { ok: s.ok, text: s.text }</textarea>
         'content-type': 'application/json',
         // Read from the document rather than written here: the value is generated per install, so a
         // literal in this file would be a token valid only on the machine it was typed on.
-        'x-vsep-token': document.querySelector('meta[name="vsep-token"]').getAttribute('content')
+        'x-vos-token': document.querySelector('meta[name="vos-token"]').getAttribute('content')
       },
       body: JSON.stringify({ program: program.value, args: runArgs || {} })
     }).then(function (r) {
@@ -227,7 +227,7 @@ return { ok: s.ok, text: s.text }</textarea>
   // Storage is a convenience, so every path through it is allowed to fail quietly: a page that cannot
   // write localStorage still runs programs, it just forgets. Saying so beats a try/catch that pretends
   // the feature exists on a browser that refused it.
-  var STORE_PREFIX = 'vsep.last.'
+  var STORE_PREFIX = 'vos.last.'
   var STORE_LIMIT = 200000
 
   function remember(id, status, body) {

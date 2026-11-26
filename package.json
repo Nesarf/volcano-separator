@@ -18,7 +18,7 @@
   },
   "bin": {
     "volcano-separator": "bin/cli.mjs",
-    "vsep": "bin/cli.mjs"
+    "vos": "bin/cli.mjs"
   },
   "exports": {
     ".": "./lib/core.mjs",

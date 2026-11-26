@@ -167,7 +167,7 @@ Options:
                      sharing one number would put this tool at the base of its own recovery walk.
                      --web-port rather than --port, because --port already means the daemon's.
                      volcano_heal is excluded: it is the one tool that changes the machine.
-                     POST needs an x-vsep-token header read from the token file (default
+                     POST needs an x-vos-token header read from the token file (default
                      ~/.volcano-separator/ptc.token, written on first start); GET stays open so a
                      caller can learn the surface before it holds the credential, and no response
                      ever carries a CORS header, which is what keeps a browser page out.
@@ -347,7 +347,7 @@ async function main() {
         console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
         if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
         if (server.ptcInfo.plugins) console.log(C.dim(`  plugins : ${server.ptcInfo.plugins} from ${pluginsDir}`))
-        console.log(C.dim(`  auth    : POST /ptc/run needs the x-vsep-token header; token file ${server.ptcInfo.tokenPath}`))
+        console.log(C.dim(`  auth    : POST /ptc/run needs the x-vos-token header; token file ${server.ptcInfo.tokenPath}`))
         if (server.ptcInfo.quiesce) console.log(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
         else console.log(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))
         console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))

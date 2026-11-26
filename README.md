@@ -71,7 +71,7 @@ node bin/cli.mjs status          # no install step: zero dependencies
 Optionally put it on PATH:
 
 ```bash
-npm link            # provides `volcano-separator` and `vsep`
+npm link            # provides `volcano-separator` and `vos`
 ```
 
 ## Commands
@@ -139,7 +139,7 @@ Options: `--profile <name>` (default `coding-agent`), `--port <n>` (default `907
 | CLI | `bin/cli.mjs` | humans, scripts, the scheduled task |
 | Library | `lib/core.mjs` | other tools (pure Node, zero dependencies) |
 | MCP | `lib/tools.mjs`, served by `lib/mcp.mjs` | any harness — 17 tools, listed below |
-| PTC | `lib/ptc.mjs`, served by `vsep ptc` | one program that sequences several read-only calls |
+| PTC | `lib/ptc.mjs`, served by `vos ptc` | one program that sequences several read-only calls |
 
 The MCP surface is **read-only apart from `heal`**, and that is the design rather than a stage of
 completion.
@@ -169,7 +169,7 @@ agent that can act on its own is a worse failure than one that has to ask.
 
 ## The programmatic surface
 
-`vsep ptc` listens on `127.0.0.1:3250` and answers two routes:
+`vos ptc` listens on `127.0.0.1:3250` and answers two routes:
 
 | Route | What it does |
 |---|---|
@@ -209,7 +209,7 @@ one tool that changes the machine, and it already has two callers with their own
 
 ### Who may run a program
 
-`POST /ptc/run` needs `content-type: application/json` and an `x-vsep-token` header whose value is in
+`POST /ptc/run` needs `content-type: application/json` and an `x-vos-token` header whose value is in
 `~/.volcano-separator/ptc.token` — written on first start, `--token-file` to put it elsewhere. `GET`
 routes stay open, so a caller can learn what exists before it holds the credential. `OPTIONS` is
 answered 405, and no response carries an `Access-Control-*` header.
@@ -227,7 +227,7 @@ as well against a server with no guard at all.
 
 ### External commands, off by default
 
-`vsep ptc --extras <path>` adds commands described in a small JSON file to the same `tools`
+`vos ptc --extras <path>` adds commands described in a small JSON file to the same `tools`
 namespace. Without the flag they do not exist, and the built-in sixteen are the whole surface.
 
 It is a file rather than a handful of hardcoded paths because of the distinction this project keeps
@@ -244,7 +244,7 @@ runs with your authority and the arguments the file gives it.
 
 ### Suspending the heartbeat
 
-`vsep ptc --allow-quiesce` adds two more bindings, and they are the only ones that change the machine:
+`vos ptc --allow-quiesce` adds two more bindings, and they are the only ones that change the machine:
 `volcano_quiesce` disables this tool's scheduled task and returns a handle; `volcano_resume` takes that
 handle and puts the task back. Off by default, and the task name is not a parameter — the only task it
 can ever touch is its own heartbeat.
