@@ -514,6 +514,15 @@ feature work; it is the parts no assertion in this repository can reach.
   provider. **Finished means:** either a fake provider is worth building for this one assertion, or the
   decision to leave it unasserted is written down here as a decision.
 
+- **The warning `volcano_activity` prints about a launcher mismatch is itself unasserted.** The
+  comparison is tested eight ways, including the doubled-quote form the generator actually writes, and
+  against the real launcher on this machine it answers `agrees: true`. What no test reaches is the line
+  the agent would read: `tools.mjs` formats every tool's answer inline, so getting at that string means
+  calling the handler with a repository whose launcher disagrees, and `readActivity` takes no
+  `projectDir` through which a test could say so. **Finished means:** either the formatting is lifted out
+  of the handler into a function a test can call with a verdict in hand, or the decision to leave the
+  outermost layer unasserted is written here as a decision.
+
 ### One decision that looks like an omission
 
 `mcp.mjs` does not expose the quiesce bindings, and will not by this route: an MCP surface loaded by the
