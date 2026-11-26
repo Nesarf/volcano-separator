@@ -4106,7 +4106,7 @@ section('plugins')
 const plug = await import('../lib/plugins.mjs')
 const shipped = plug.loadPlugins(join(here, '..', 'plugins'))
 ok('the shipped plugin directory loads without problems',
-  shipped.plugins.length === 9 && shipped.problems.length === 0,
+  shipped.plugins.length === 10 && shipped.problems.length === 0,
   shipped.plugins.length + ' plugins, ' + shipped.problems.length + ' problems')
 // The cross-project plugin is checked for its shape only. Running it for real needs this machine's
 // extras file, which lives outside the repository on purpose -- a suite that reached into it would be
