@@ -29,9 +29,13 @@
   - **One check in this batch was wrong and a test caught it**: `!content` is false for three spaces, so a
     whitespace-only tool result sailed past the guard and went to the network. It is `!content.trim()` now,
     and the assertion that found it is the reason the guard is worth having.
-  - **`vos web timed`** shuts the server down after `--minutes` (30 by default) through the same path Ctrl+C
-    takes. That path is where a suspended heartbeat is given back, so a second shutdown route would have
-    been a second place for that to be forgotten.
+  - **`vos web timed`** keeps a timestamped log per start, `vos-web-<yyyyMMdd-HHmmss>.log` under the log
+    directory — the same convention `dsh-web-timed.ps1` uses for its own logs, so the two kinds sort together
+    in one listing. The point is that the run which went wrong is still on disk after the next one has
+    scrolled the terminal away. **It does not stop by itself**; that was this entry's first reading of the
+    word, it was wrong, and the correction is worth more than the feature: `timed` here has always meant
+    time-stamped, and a second meaning invented from the spelling would have sent the next reader to the
+    wrong place.
 
 - **The command is `vos web`, not `vos ptc`.** `ptc` is the module's vocabulary — programmatic tool calling
   — and `web` is the thing a person goes looking for. The HTTP paths stay `/ptc/*`: those are a contract

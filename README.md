@@ -369,9 +369,13 @@ Without `--allow-llm` the route answers 404 and names the switch.
 
 ### `vos web timed`
 
-The usual reason to start this is "have a look for a while", and the usual way that ends is a terminal
-somebody forgot about. `vos web timed` shuts down after `--minutes` (30 by default) through the same path
-Ctrl+C takes — which matters, because that path is where a suspended heartbeat is given back.
+`timed` keeps a timestamped log per start — `vos-web-<yyyyMMdd-HHmmss>.log` under the log directory, written
+from the same lines the terminal shows but without the colour. The convention is the one
+`dsh-web-timed.ps1` uses for its own logs, so both kinds sort together in one listing, and the run that went
+wrong is still on disk after the next one has scrolled the terminal away. The startup output ends with that
+path, so there is nothing to remember.
+
+It does not stop by itself. A time limit is a different word, and would be a different flag.
 
 MCP client config:
 

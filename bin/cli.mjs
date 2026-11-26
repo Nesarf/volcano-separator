@@ -20,6 +20,7 @@
  */
 
 import { fileURLToPath } from 'node:url'
+import { createWriteStream, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import * as g from '../lib/core.mjs'
 import * as res from '../lib/resources.mjs'
@@ -78,6 +79,15 @@ async function readAllStdin() {
   const chunks = []
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk))
   return Buffer.concat(chunks).toString('utf8').trim()
+}
+
+/**
+ * `yyyyMMdd-HHmmss`, the same shape `dsh-web-timed.ps1` uses for its own logs. The two kinds sort together
+ * in one directory listing, which is the only reason a format this specific is worth agreeing on.
+ */
+function stamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
 const C = {
@@ -173,7 +183,7 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
-  web [timed] [--web-port N] [--minutes N] [--extras FILE] [--token-file FILE]
+  web [timed] [--web-port N] [--extras FILE] [--token-file FILE]
                      the web surface. POST /ptc/run carries a program that calls the read-only tool
                      bindings and returns one structured result; POST /ptc/chat carries a conversation,
                      and with --allow-llm the model can call those same tools itself -- which is what
@@ -201,10 +211,11 @@ Options:
                      status" reports. A separate switch from --allow-quiesce on purpose -- changing this
                      machine and spending money are different decisions. Configure it with "vos llm
                      set-key"; with no key every call fails as no-key rather than quietly doing nothing.
-                     timed (the second word) shuts the server down after --minutes (default 30), through
-                     the same path Ctrl+C takes. That path is not a detail: it is where a suspended
-                     heartbeat is given back, and a second shutdown route would be a second place for
-                     that to be forgotten.
+                     timed (the second word) keeps a timestamped log per start under DEFAULTS.logDir,
+                     named vos-web-<yyyyMMdd-HHmmss>.log -- the same convention dsh-web-timed.ps1 uses
+                     for its own logs, so the two sort together in one listing. The point is that the
+                     run which went wrong is still on disk after the next one has scrolled the terminal
+                     away. It does not stop by itself.
                      --plugins DIR points at a directory of plugin programs (default: the plugins/
                      directory in this repository; --plugins '' loads none). A plugin is one .js file
                      whose first comment lines are name: / description: / needs:, and whose body is a
@@ -347,12 +358,27 @@ async function main() {
       // pointed every later recovery at the wrong port owner. A second meaning for an existing flag is how a
       // convenience becomes a defect.
       //
-      // `web timed` exists because the usual reason to start this is "have a look for a while", and the usual
-      // way that ends is a terminal somebody forgot about. It shuts down after `--minutes` (30 by default)
-      // through the same path Ctrl+C takes -- which matters, because that path is what gives a suspended
-      // heartbeat back.
+      // `timed` means what it means in dsh-web-timed.ps1: keep a timestamped log per start, so the run that
+      // went wrong is still on disk after the next one has scrolled the terminal away. It is not a time
+      // limit -- that would be a different word, and a different flag.
       const timed = opts._[1] === 'timed'
-      const minutes = Number(opts.minutes) > 0 ? Number(opts.minutes) : 30
+      let logFile = null
+      let logStream = null
+      if (timed) {
+        try {
+          mkdirSync(ctx.logDir, { recursive: true })
+          logFile = join(ctx.logDir, `vos-web-${stamp()}.log`)
+          logStream = createWriteStream(logFile, { flags: 'a' })
+        } catch (e) {
+          if (!opts.json) console.error(C.yellow('WARN') + `: could not open a log file under ${ctx.logDir}: ${e?.message ?? e}`)
+        }
+      }
+      // The terminal is colourised; a log file should not be. Everything the server itself says goes to both,
+      // and the file gets a timestamp per line so a line can be placed without knowing when the run started.
+      const say = (line) => {
+        console.log(line)
+        if (logStream) logStream.write(String(line).replace(/\u001b\[[0-9;]*m/g, '') + '\n')
+      }
       const port = Number(opts['web-port']) || ctx.webPort
       // `--extras` is the only way external commands reach this surface. Omitting it leaves the built-ins as
       // the whole list, which is the default on purpose: the file names commands that run with this user's
@@ -380,59 +406,63 @@ async function main() {
         ? join(PROJECT_DIR, 'plugins')
         : (pluginsArg ? String(pluginsArg) : null)
       const { createPtcServer, listen, DENIED } = await import('../lib/ptc.mjs')
-      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath, allowQuiesce, allowLlm, taskName: ctx.taskName, pluginsDir })
+      const logger = (m) => {
+        log(m)
+        if (logStream) logStream.write(`[${new Date().toISOString()}] ${m}\n`)
+      }
+      const server = createPtcServer({ webPort: port, logger, extrasPath, tokenPath, allowQuiesce, allowLlm, taskName: ctx.taskName, pluginsDir })
       let addr
       try {
         addr = await listen(server, { webPort: port })
       } catch (e) {
-        const detail = `could not listen on ${port}: ${e?.message ?? e}`
+        let detail = `could not listen on ${port}: ${e?.message ?? e}`
+        // A busy port is the one failure whose next question is always "who has it". Answering it here turns a
+        // failed start into a one-line diagnosis, which is the difference between the next person reading this
+        // and the next person guessing.
+        if (/EADDRINUSE/.test(String(e?.message ?? ''))) {
+          const holder = await g.entity(ctx, 'port', port).catch(() => null)
+          if (holder?.identity?.pid) {
+            detail += ` -- held by pid ${holder.identity.pid}` + (holder.identity.path ? ` (${holder.identity.path})` : '')
+          }
+        }
         if (opts.json) return emit({ ok: false, detail })
         console.error(C.red('FAIL') + ': ' + detail)
+        console.error(C.dim('  to reuse the port: stop that process, or choose another with --web-port'))
         process.exit(1)
       }
       if (opts.json) {
-        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, timed, minutes: timed ? minutes : null, ...server.ptcInfo }))
+        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, timed, logFile, ...server.ptcInfo }))
       } else {
-        console.log(`${C.green('ok')} web: listening on http://${addr.address}:${addr.port}`)
-        console.log(C.dim(`  GET  /ptc/bindings   ${server.ptcInfo.tools} tool(s), with schemas`))
-        console.log(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
-        if (server.ptcInfo.llm) console.log(C.dim('  POST /ptc/chat       { "messages": [{ "role": "user", "content": "..." }] } -- tools included'))
-        console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
-        if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
-        if (server.ptcInfo.plugins) console.log(C.dim(`  plugins : ${server.ptcInfo.plugins} from ${pluginsDir}`))
-        console.log(C.dim(`  auth    : POST needs the x-vos-token header; token file ${server.ptcInfo.tokenPath}`))
-        if (server.ptcInfo.quiesce) console.log(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
-        else console.log(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))
-        if (server.ptcInfo.llm) console.log(C.dim('  llm     : vos_ask may call a model; the prompt leaves this machine and it costs money'))
-        else console.log(C.dim('  llm     : off -- --allow-llm lets a program call a model'))
-        if (timed) console.log(C.dim(`  timed   : shuts itself down in ${minutes} minute(s), through the same path Ctrl+C takes`))
-        console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
+        say(`${C.green('ok')} web: listening on http://${addr.address}:${addr.port}`)
+        say(C.dim(`  GET  /ptc/bindings   ${server.ptcInfo.tools} tool(s), with schemas`))
+        say(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
+        if (server.ptcInfo.llm) say(C.dim('  POST /ptc/chat       { "messages": [{ "role": "user", "content": "..." }] } -- tools included'))
+        say(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
+        if (server.ptcInfo.extras) say(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
+        if (server.ptcInfo.plugins) say(C.dim(`  plugins : ${server.ptcInfo.plugins} from ${pluginsDir}`))
+        say(C.dim(`  auth    : POST needs the x-vos-token header; token file ${server.ptcInfo.tokenPath}`))
+        if (server.ptcInfo.quiesce) say(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
+        else say(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))
+        if (server.ptcInfo.llm) say(C.dim('  llm     : vos_ask may call a model; the prompt leaves this machine and it costs money'))
+        else say(C.dim('  llm     : off -- --allow-llm lets a program call a model'))
+        if (logFile) say(C.dim(`  log     : ${logFile}`))
+        say(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
       }
-      // Stay up until interrupted, or until a timed run's clock runs out. Nothing else keeps the loop alive
-      // on purpose: a server with an open handle would too, but relying on that makes the exit path implicit.
-      let timer = null
+      // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an open handle
+      // would too, but relying on that makes the exit path implicit.
       await new Promise((resolve) => {
         process.once('SIGINT', resolve)
         process.once('SIGTERM', resolve)
-        if (timed) {
-          timer = setTimeout(() => {
-            if (!opts.json) {
-              console.log('')
-              console.log(C.dim(`web: ${minutes} minute(s) are up`))
-            }
-            resolve()
-          }, minutes * 60 * 1000)
-        }
       })
-      if (timer) clearTimeout(timer)
       // Give a suspension back before this process goes away. This is the only place that can: the handle
       // lives in this process's memory, and enabling a scheduled task needs a child process that this one is
       // about to stop being.
       const released = await server.releaseQuiesce('web server stopping')
-      if (released.released) console.log(C.dim('web: the heartbeat suspension was released'))
+      if (released.released) say(C.dim('web: the heartbeat suspension was released'))
       else if (released.ok === false) console.error(C.red('WARN') + `: could not release the heartbeat suspension: ${released.why}`)
       await new Promise((resolve) => server.close(resolve))
-      console.log(C.dim('web: closed'))
+      say(C.dim('web: closed' + (logFile ? ` -- ${logFile}` : '')))
+      if (logStream) logStream.end()
       process.exit(0)
     }
 
