@@ -358,6 +358,29 @@
 
 ### Fixed
 
+- **The activity recorder and its reader had been looking at two different directories since 11-24, and
+  nothing said so for three days.** `readActivity` reads `activityDir(ctx)`, derived from `tmpdir()` —
+  `D:\DaShaoHuo\cache\tmp\volcano-separator\activity` on this machine. The recorder runs as SYSTEM and is
+  handed its directory explicitly by the VBS launcher, and that launcher was written by an
+  `install-service` run from a shell whose `TEMP` pointed at E:. So the machine-wide record — every process
+  start and stop, every persistence change — accumulated where no reader looks, while the directory every
+  reader looks at received only the couple of dozen records Node itself appends. At the moment of the fix
+  the reader saw 20 records for 11-26 with 55,790 of them sitting next door.
+  - Found by measuring rather than by reasoning: the two directories' `recorder.lock` files carried the
+    same pid, byte length and creation time, which two independent files cannot, and the answer was that
+    they were two copies of one history rather than one live directory.
+  - Repaired by re-running `installActivityTask` (the launcher now names `D:`), stopping the old recorder,
+    merging the old directory into the new one with the lines re-sorted by their `t` field — an appended
+    block of older records would read as the present — and starting the recorder again. The reader went
+    from near-empty to `total: 36952, readable: true, complete: true, unreadableLines: 0`, and the recorder
+    at the new pid took its lock in the same directory the reader opens.
+  - **The launcher in the repository was also two months behind its generator.** It still said
+    `powershell.exe` where `installActivityTask` writes `powershell`, and `platform.mjs` is the one place
+    that choice is made — the commit which centralised it did not re-run the install. Both differences
+    travelled in one commit because they have one cause: a generated file that nobody regenerates is a copy
+    of its generator, frozen at the day it was written, and it will silently disagree with the code that
+    reads its path.
+
 - **`supervisor.mjs` called a function that does not exist, and the suite had never walked the branch.**
   `healStatus` guards its lock read with `Boolean(lock && ... && (lock.pid ? pidAlive(lock.pid) : true))`,
   but the local copy of that helper is named `recoveryPidAlive`: `lock.mjs` keeps `pidAlive` private on
