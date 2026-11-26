@@ -480,13 +480,19 @@ feature work; it is the parts no assertion in this repository can reach.
 
 ### What is open
 
-- **Nobody has looked at the page.** Headless Chrome on this machine produces nothing: `--dump-dom`
-  writes zero bytes, `--screenshot` writes no file, under both `--headless` and `--headless=new`, with a
-  fresh profile each time. So the pixel-art constraint that has applied to every surface since
-  2026-10-06 has been checked structurally and never visually. What *is* covered: the palette is read
-  from `bin/panel.json` and the page is asserted to carry those nine values; the plugin list, parameter
-  boxes, badges and heartbeat strip are all asserted in the markup; the script parses.
-  **Finished means:** one real screenshot, compared against the palette and the bevel rule by eye.
+- **The rendered page has never been looked at. Its document has.** Headless Chrome on this machine
+  produces nothing — `--dump-dom` writes zero bytes, `--screenshot` writes no file, under both
+  `--headless` and `--headless=new`, with a fresh profile each time. But the saved document was read back
+  line by line once, and it is correct: the nine palette values are present, the 23 bindings and 9
+  plugins are there with their parameter boxes and sizes, `data-confirm` sits on the right entry, the
+  JSON block parses, the script is intact end to end.
+  That read found a real usability defect, which is the argument for doing it: **hover titles carried
+  whole descriptions**, five hundred characters for `volcano_entity`, and a browser renders a title as
+  one unwrapped line wider than the window. Now shortened to the first sentence, with the full text left
+  in the JSON endpoints where a reader should be looking for it anyway.
+  **What is still unseen is the rendering**: font metrics, column balance, whether anything overlaps at
+  100% zoom, whether the pixelated text reads as pixel art or as blur. **Finished means:** one real
+  screenshot, compared against the palette and the bevel rule by eye.
 
 - **A plugin with a syntax error is found by clicking it.** `loadPlugins` validates the header and the
   size, and `runProgram` answers `did not parse` — but only once somebody runs it. Pre-parsing each

@@ -4230,6 +4230,14 @@ ok('params travel to the discovery endpoint too',
   JSON.stringify(plugList.plugins.find((p) => p.id === 'host')?.params) === JSON.stringify([{ name: 'port', default: '3080' }]))
 ok('the merged plugin is runnable when the switch is on', plugList.plugins.find((p) => p.id === 'heartbeat')?.runnable === true)
 ok('the confirmation reaches the markup as an attribute', /data-confirm="[^"]*计划任务/.test(plugPage))
+// A tooltip is one unwrapped line, and several descriptions run past five hundred characters. The page
+// keeps the first sentence; the full text stays in the JSON endpoints, which is where a caller that
+// wants to read it should be looking anyway. Asserted with a number so a regression shows its size.
+const entityTitle = /data-name="volcano_entity" title="([^"]*)"/.exec(plugPage)?.[1] ?? ''
+ok('a long description is shortened for the hover title',
+  entityTitle.length > 20 && entityTitle.length <= 145, String(entityTitle.length) + ' chars')
+ok('and it ends at a boundary with an ellipsis rather than mid-word',
+  /…$/.test(entityTitle) && !/\s\S{1,2}…$/.test(entityTitle), entityTitle.slice(-40))
 ok('a plugin without one gets no attribute', !/data-id="patrol"[^>]*data-confirm/.test(plugPage))
 
 // The page's own script is never executed here -- there is no browser on this machine that renders -- but
