@@ -484,19 +484,30 @@ feature work; it is the parts no assertion in this repository can reach.
 
 ### What is open
 
-- **The rendered page has never been looked at. Its document has.** Headless Chrome on this machine
-  produces nothing — `--dump-dom` writes zero bytes, `--screenshot` writes no file, under both
-  `--headless` and `--headless=new`, with a fresh profile each time. But the saved document was read back
-  line by line once, and it is correct: the nine palette values are present, the 23 bindings and 9
-  plugins are there with their parameter boxes and sizes, `data-confirm` sits on the right entry, the
-  JSON block parses, the script is intact end to end.
-  That read found a real usability defect, which is the argument for doing it: **hover titles carried
-  whole descriptions**, five hundred characters for `volcano_entity`, and a browser renders a title as
-  one unwrapped line wider than the window. Now shortened to the first sentence, with the full text left
-  in the JSON endpoints where a reader should be looking for it anyway.
-  **What is still unseen is the rendering**: font metrics, column balance, whether anything overlaps at
-  100% zoom, whether the pixelated text reads as pixel art or as blur. **Finished means:** one real
-  screenshot, compared against the palette and the bevel rule by eye.
+- **The rendered page has now been looked at, and how to look at it again is the part worth keeping.**
+  Headless Chrome on this machine produces nothing — `--dump-dom` writes zero bytes, `--screenshot`
+  writes no file, under both `--headless` and `--headless=new`, with a fresh profile each time. Firefox
+  does work, and only with its own profile: `--headless --screenshot` against the default profile reuses
+  the running instance, writes no file, and leaves a headless process alive instead.
+
+  ```
+  firefox -no-remote -profile D:\DaShaoHuo\cache\tmp\ff-prof-vos --headless `
+          --screenshot D:\DaShaoHuo\cache\tmp\vos-page-3250.png http://127.0.0.1:3250/
+  ```
+
+  One screenshot at 1366 px, read back against the palette and the bevel rule: **no structural defect.**
+  24 bindings listed with `volcano_heal` struck through and dimmed, 9 plugins with their parameter boxes
+  and the `uv 缓存` one correctly having none, the program editor holding its sample, and the agent window
+  saying `nothing said yet` above an enabled input. The pixel font renders crisp rather than blurry, the
+  nine palette roles are the ones in `bin/panel.json`, and the 1000 px shell sits centred with equal
+  margins. Two things looked wrong at first read and were not: the right-hand whitespace is the centred
+  shell at a wider viewport, and `click to insert at the cursor. 1 excluded.` wraps to a second line
+  inside the 250 px column rather than being clipped by its ellipsis rule.
+
+  What the earlier document-only read found was still the more valuable defect — hover titles carrying
+  whole descriptions, five hundred characters for `volcano_entity`, which a browser draws as one
+  unwrapped line wider than the window. That is fixed. **Finished means:** a screenshot after any change
+  to `page.html` or `bin/panel.json`, taken with the command above.
 
 - **A plugin with a syntax error is found by clicking it.** `loadPlugins` validates the header and the
   size, and `runProgram` answers `did not parse` — but only once somebody runs it. Pre-parsing each
