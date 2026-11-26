@@ -207,6 +207,24 @@ security boundary, as Node's own documentation says. What it does have is a fixe
 `require` or `process` in the context, and a deadline. `volcano_heal` is excluded by name: it is the
 one tool that changes the machine, and it already has two callers with their own gates.
 
+### Who may run a program
+
+`POST /ptc/run` needs `content-type: application/json` and an `x-vsep-token` header whose value is in
+`~/.volcano-separator/ptc.token` — written on first start, `--token-file` to put it elsewhere. `GET`
+routes stay open, so a caller can learn what exists before it holds the credential. `OPTIONS` is
+answered 405, and no response carries an `Access-Control-*` header.
+
+What that defends is narrower than "local security", and saying so is the point: any process running as
+this user can read the token file, so it is not a border between local processes. It keeps out a page
+on another origin. Such a page can send `GET /` — a simple request, no permission needed — but without
+CORS it cannot read the response, so the token inlined into that page never reaches it; and it cannot
+send the POST at all, because a JSON content type plus a custom header makes the request preflighted
+and this server answers no preflight.
+
+The shape requirement is therefore the load-bearing half and the token is the second lock. Both are
+checked, and the suite asserts each one by taking it away: a test of the happy path alone passes just
+as well against a server with no guard at all.
+
 ### External commands, off by default
 
 `vsep ptc --extras <path>` adds commands described in a small JSON file to the same `tools`

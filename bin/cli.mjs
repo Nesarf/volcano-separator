@@ -159,13 +159,20 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
-  ptc [--web-port N] the programmatic surface. POST /ptc/run carries a program that calls the
+  ptc [--web-port N] [--extras FILE] [--token-file FILE]
+                     the programmatic surface. POST /ptc/run carries a program that calls the
                      read-only tool bindings and returns one structured result; GET /ptc/bindings
                      lists them with schemas. Listens on DEFAULTS.webPort (3250), which is not the
                      daemon's port -- killDaemonTree walks up from the daemon's port owner, and
                      sharing one number would put this tool at the base of its own recovery walk.
                      --web-port rather than --port, because --port already means the daemon's.
                      volcano_heal is excluded: it is the one tool that changes the machine.
+                     POST needs an x-vsep-token header read from the token file (default
+                     ~/.volcano-separator/ptc.token, written on first start); GET stays open so a
+                     caller can learn the surface before it holds the credential, and no response
+                     ever carries a CORS header, which is what keeps a browser page out.
+                     --extras names a JSON file of external commands to expose as bindings; without
+                     it the built-in tools are the whole list.
   entity <pid|path|port> <value>
                      everything known about one process, one file or one port, from every surface
                      at once. A port resolves to the pid holding it now, which is the join back to
@@ -292,8 +299,12 @@ async function main() {
       // built-in sixteen as the whole list, which is the default on purpose: the file names commands
       // that run with this user's authority, so naming it is a decision rather than an accident.
       const extrasPath = opts.extras ? String(opts.extras) : null
+      // Where POST /ptc/run reads its credential. Default is `<home>/.volcano-separator/ptc.token`,
+      // which is already restricted to this user on every platform; the switch is for a caller that
+      // manages its own secret directory. Nothing prints the value -- see the auth line below.
+      const tokenPath = opts['token-file'] ? String(opts['token-file']) : null
       const { createPtcServer, listen, DENIED } = await import('../lib/ptc.mjs')
-      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath })
+      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath })
       let addr
       try {
         addr = await listen(server, { webPort: port })
@@ -311,6 +322,7 @@ async function main() {
         console.log(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
         console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
         if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
+        console.log(C.dim(`  auth    : POST /ptc/run needs the x-vsep-token header; token file ${server.ptcInfo.tokenPath}`))
         console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
       }
       // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an

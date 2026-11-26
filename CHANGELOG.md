@@ -4,6 +4,59 @@
 
 ### Added
 
+- **`vsep ptc`: one request carries a program, and the program sequences the read-only tools.** The
+  MCP surface answers one tool per round trip, which puts a repair that is really "check, act, check
+  again" into the caller's head. A program puts the sequencing where it can be read and tested:
+
+  ```js
+  const s = await tools.volcano_heal_status({})
+  if (!s.ok) return { heal: s, processes: await tools.volcano_ps({}) }
+  return { heal: s }
+  ```
+
+  - **Not a second implementation.** The bindings are generated from the same `TOOLS` array and
+    dispatch through the same `call()` the MCP server uses; the two were split into `lib/tools.mjs`
+    rather than copied, so a tool fixed there is fixed here and a schema that changes there changes
+    here.
+  - **The failure taxonomy stays orthogonal** — `exception`, `timeout`, `abort`, `worker-exit`,
+    `invalid-output`, `output-limit` — because a budget expiry is not an exception and an abort is not
+    a timeout. A program that returns nothing is a run that produced logs and no completion value, not
+    a failure; the first cut got that wrong and the ordering is now asserted.
+  - **`volcano_heal` is excluded by name**, and the exclusion is asserted in the binding list rather
+    than left for a reader to notice. An anonymous HTTP endpoint would be a third gate on the one tool
+    that changes the machine, and a third gate next to two is usually a hole in the other two.
+  - Opening `/` is the same surface with a face — binding list, program editor, last run underneath —
+    drawn with the nine roles from `bin/panel.json` read at request time, so the page and the chamber's
+    window cannot disagree about what this tool looks like.
+  - **`POST /ptc/run` needs `content-type: application/json` and an `x-vsep-token` header** whose value
+    is in `~/.volcano-separator/ptc.token` (written on first start, `--token-file` to move it). `GET`
+    routes stay open so a caller can learn the surface before it holds the credential. `OPTIONS` is
+    answered 405 and no response carries an `Access-Control-*` header.
+    - What that defends is narrower than it sounds, and stating the limit is the point: any process
+      running as this user can read the token file, so it is not a border between local processes. It
+      keeps out a page on another origin — such a page can send `GET /`, which is a simple request, but
+      without CORS it cannot read the response, so the inlined token never reaches it; and it cannot
+      send the POST at all, because a JSON content type plus a custom header makes the request
+      preflighted and this server answers no preflight.
+    - So the **shape** requirement is the load-bearing half and the token is the second lock. Both are
+      checked, and the suite asserts each one **by removing it and watching the request fail** — a
+      happy-path test passes just as well against a server with no guard at all.
+
+- **`vsep ptc --extras <path>`: external commands as bindings, and only when a file names them.**
+  Without the flag they do not exist, and the built-in sixteen are the whole surface. A file rather
+  than a handful of hardcoded paths, because *origin* and *dependency* are different things: a resource
+  may be produced in another checkout as long as what runs reads nothing outside its own repository. A
+  binding pointing at another project's script would be a dependency **in the running process**, and
+  the first time that checkout moved the tool would start failing for a reason unrelated to supervising
+  anything.
+  - The file is read once at start-up, never per request, so a file edited mid-run cannot change what
+    an already-running server will execute, and a load problem is visible at the moment somebody
+    started it rather than at the moment a program first called it.
+  - A name that collides with a built-in **throws at start-up** instead of shadowing it, which is also
+    the only moment when the person who typed the file is still there to read the error.
+  - A binding answers `{ ok, exitCode, json?, text }` — `json` only when stdout parsed as JSON, `text`
+    always, and a non-zero exit as `ok: false` rather than an exception.
+
 - **`entity <pid|path>` / `volcano_entity`: one identity, every surface's answer, together.** The
   surfaces could always be asked one at a time; what was missing was asking about one *thing* and
   getting every answer at once. This is the osquery idea reduced to what this tool actually needs —
@@ -65,6 +118,17 @@
     chain, and that is a trade this tool has not made.
 
 ### Fixed
+
+- **`supervisor.mjs` called a function that does not exist, and the suite had never walked the branch.**
+  `healStatus` guards its lock read with `Boolean(lock && ... && (lock.pid ? pidAlive(lock.pid) : true))`,
+  but the local copy of that helper is named `recoveryPidAlive`: `lock.mjs` keeps `pidAlive` private on
+  purpose, and `supervisor.mjs` copied the same six lines rather than widening that module's surface for
+  one caller. Both call sites kept the old name, so the new function was dead and both references were
+  dangling — a rename that was done halfway and looked finished.
+  - The tell is worth keeping. The previous run of the suite was green, and it was green because the
+    `&&` chain short-circuits when no lock file exists, so the broken half was never evaluated. **A
+    passing suite says the tested path works, not that the untested path does.** The branch is reached
+    on any machine where the lock is present, which is most machines most of the time.
 
 - **`every module imports the symbols it uses` was failing on a false positive, and had been for an
   unknown length of time.** It counted an object literal's **property key** as a use of an imported

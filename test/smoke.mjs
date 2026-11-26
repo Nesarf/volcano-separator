@@ -3797,36 +3797,47 @@ ok('a program that does not parse is reported as exception',
   ptc7.error?.kind === 'exception' && /did not parse/.test(ptc7.error.message))
 
 const PTC_PORT = 3251
-const ptcSrv = ptc.createPtcServer({ webPort: PTC_PORT })
+// A token file inside the test's own directory. Given as a path rather than left to the default so
+// the suite never reads or writes the one under the user's home -- a test that shares a credential
+// with the running installation is a test that can be broken by using the thing it is testing.
+const ptcTokenFile = join(tmpdir(), 'vsep-smoke-token-' + process.pid + '.txt')
+rmSync(ptcTokenFile, { force: true })
+const ptcSrv = ptc.createPtcServer({ webPort: PTC_PORT, tokenPath: ptcTokenFile })
 const ptcAddr = await ptc.listen(ptcSrv, { webPort: PTC_PORT })
 ok('the surface listens on loopback', ptcAddr.address === '127.0.0.1' && ptcAddr.port === PTC_PORT, JSON.stringify(ptcAddr))
 
+const ptcToken = readFileSync(ptcTokenFile, 'utf8').trim()
+ok('the server writes a 64-character token to the path it reports',
+  ptcToken.length === 64 && ptcSrv.ptcInfo.tokenPath === ptcTokenFile, ptcToken.length + ' chars')
+
 const httpMod = await import('node:http')
-function ptcGet(path) {
+function ptcRaw(method, path, headers, body) {
   return new Promise((resolve, reject) => {
-    const req = httpMod.get({ host: '127.0.0.1', port: PTC_PORT, path }, (r) => {
+    const h = { ...headers }
+    const payload = body === undefined ? null : Buffer.from(body)
+    if (payload) h['content-length'] = String(payload.length)
+    const req = httpMod.request({ host: '127.0.0.1', port: PTC_PORT, path, method, headers: h }, (r) => {
       let b = ''
       r.on('data', (c) => (b += c))
-      r.on('end', () => resolve({ status: r.statusCode, body: b }))
+      r.on('end', () => resolve({ status: r.statusCode, headers: r.headers, body: b }))
     })
     req.on('error', reject)
-  })
-}
-function ptcPost(path, obj) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify(obj)
-    const req = httpMod.request(
-      { host: '127.0.0.1', port: PTC_PORT, path, method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } },
-      (r) => {
-        let b = ''
-        r.on('data', (c) => (b += c))
-        r.on('end', () => resolve({ status: r.statusCode, body: b }))
-      },
-    )
-    req.on('error', reject)
-    req.write(data)
+    if (payload) req.write(payload)
     req.end()
   })
+}
+function ptcGet(path) {
+  return ptcRaw('GET', path, {})
+}
+/**
+ * A post that carries the credential already. An override whose value is `null` removes that header
+ * rather than sending it blank -- "no credential" and "a credential that is empty" are different
+ * requests, and only the first one tests the branch that a browser page would take.
+ */
+function ptcPost(path, obj, overrides = {}) {
+  const h = { 'content-type': 'application/json', 'x-vsep-token': ptcToken, ...overrides }
+  for (const k of Object.keys(h)) if (h[k] === null) delete h[k]
+  return ptcRaw('POST', path, h, JSON.stringify(obj))
 }
 
 const ptcB = await ptcGet('/ptc/bindings')
@@ -3842,6 +3853,58 @@ ok('and returns the value', JSON.parse(ptcRun.body).value?.n === 1, ptcRun.body)
 const ptcBad = await ptcPost('/ptc/run', { program: 'throw new Error("nope")' })
 ok('a throwing program answers 400', ptcBad.status === 400, String(ptcBad.status))
 ok('and the body names the failure kind', JSON.parse(ptcBad.body).error?.kind === 'exception', ptcBad.body)
+
+// --- the credential, checked by taking it away -------------------------------- //
+// Each request below is one the server answered happily before the token existed, and each removes
+// exactly one ingredient. That is the only shape of test that proves a guard is load-bearing: a test
+// of the happy path alone passes just as well against a server with no guard at all.
+//
+// What this is defending is narrower than it sounds. Any process running as this user can read that
+// file, so the token is not a border between local processes. It is there to keep a page on another
+// origin out, and the *shape* checks next to it are the part that does most of that work -- a browser
+// cannot send a JSON post with a custom header without a preflight this server refuses to answer.
+const ptcNoToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vsep-token': null })
+ok('POST without the token is refused', ptcNoToken.status === 401, String(ptcNoToken.status))
+ok('and the answer names the header, so a caller can fix it',
+  /x-vsep-token/.test(ptcNoToken.body), ptcNoToken.body.slice(0, 160))
+
+const ptcWrongToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vsep-token': 'a'.repeat(64) })
+ok('POST with a wrong token of the right length is refused', ptcWrongToken.status === 401, String(ptcWrongToken.status))
+
+const ptcShortToken = await ptcPost('/ptc/run', { program: 'return 1' }, { 'x-vsep-token': 'a' })
+ok('a shorter guess is refused rather than throwing out of the comparison',
+  ptcShortToken.status === 401, String(ptcShortToken.status))
+
+const ptcPlain = await ptcPost('/ptc/run', { program: 'return 1' }, { 'content-type': 'text/plain' })
+ok('POST with a simple content type is refused before the token is read',
+  ptcPlain.status === 415, String(ptcPlain.status))
+
+const ptcOptions = await ptcRaw('OPTIONS', '/ptc/run', {})
+ok('OPTIONS is answered 405 rather than with a preflight', ptcOptions.status === 405, String(ptcOptions.status))
+ok('and carries no Access-Control header',
+  !Object.keys(ptcOptions.headers).some((k) => k.toLowerCase().startsWith('access-control-')),
+  JSON.stringify(ptcOptions.headers))
+
+const ptcGoodHeaders = await ptcRaw('POST', '/ptc/run', { 'content-type': 'application/json', 'x-vsep-token': ptcToken }, JSON.stringify({ program: 'return 1' }))
+ok('the same route still answers when both ingredients are present', ptcGoodHeaders.status === 200, String(ptcGoodHeaders.status))
+ok('and that answer carries no Access-Control header either',
+  !Object.keys(ptcGoodHeaders.headers).some((k) => k.toLowerCase().startsWith('access-control-')),
+  JSON.stringify(ptcGoodHeaders.headers))
+
+// Opening the page is not the same as running a program: the page can be fetched without a
+// credential, so the one thing that must not happen is the credential arriving in it for a reader
+// that has no business seeing it. It is inlined into the document on purpose -- a page on another
+// origin can send this GET but cannot read the response -- and the meta name is asserted because the
+// script reads the token from that name, not from a literal.
+const ptcPageToken = await ptcGet('/')
+ok('the page carries the token for its own script', ptcPageToken.body.includes(ptcToken))
+ok('under the meta name the script looks up', /<meta name="vsep-token" content="/.test(ptcPageToken.body))
+
+const ptcJsonAuth = await ptcGet('/ptc')
+const ptcJsonAuthBody = JSON.parse(ptcJsonAuth.body)
+ok('GET /ptc reports the credential scheme', ptcJsonAuthBody.auth?.header === 'x-vsep-token', ptcJsonAuth.body.slice(0, 200))
+ok('it names the file a caller has to read', ptcJsonAuthBody.auth?.tokenFile === ptcTokenFile, String(ptcJsonAuthBody.auth?.tokenFile))
+ok('and it does not carry the value it tells you to go read', !ptcJsonAuth.body.includes(ptcToken))
 
 const ptcPage = await ptcGet('/')
 ok('GET / answers an HTML document', ptcPage.status === 200 && /^<!doctype html>/i.test(ptcPage.body), String(ptcPage.status))
@@ -3870,6 +3933,7 @@ ok('an unknown route answers 404', ptc404.status === 404, String(ptc404.status))
 
 await new Promise((resolve) => ptcSrv.close(resolve))
 ok('the surface closes', ptcSrv.listening === false)
+rmSync(ptcTokenFile, { force: true })
 
 // --- extras: external commands as bindings ---------------------------------- //
 // The core must keep knowing nothing about any other project, so these are checked with a command

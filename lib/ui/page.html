@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>volcano-separator -- ptc</title>
+<!-- the token for POST /ptc/run; filled in at request time, read by the script below -->
+<meta name="vsep-token" content="{{TOKEN}}">
 <style>
 /* palette — replaced at request time with the nine roles read from bin/panel.json */
 :root {
@@ -177,7 +179,12 @@ return { ok: s.ok, text: s.text }</textarea>
     result.innerHTML = ''
     fetch('/ptc/run', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        // Read from the document rather than written here: the value is generated per install, so a
+        // literal in this file would be a token valid only on the machine it was typed on.
+        'x-vsep-token': document.querySelector('meta[name="vsep-token"]').getAttribute('content')
+      },
       body: JSON.stringify({ program: program.value })
     }).then(function (r) {
       return r.json().then(function (body) { return { status: r.status, body: body } })
