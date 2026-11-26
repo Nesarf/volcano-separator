@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **`vos web` is a foreground command, and that is now written down as the design rather than left looking
+  like a service nobody got round to writing.** The heartbeat's scheduled task runs `heal`, never `web`; a
+  repair neither consults this server nor notices whether it is up; and `Ctrl+C` releases a suspension it
+  holds, closes the socket and exits 0. Nobody had said any of that, so the absence read as unfinished work
+  — the shape this project keeps removing, where a "nothing" without a stated reason invites the next person
+  to fill it in with a login task. Recorded in `README.md` and, with the conditions that would justify
+  revisiting it, in `TODO.md`.
+
 ### Added
 
 - **A conversation's tool calls are recorded, because a browser's memory is not evidence.** Every call is

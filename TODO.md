@@ -4,6 +4,10 @@ Work that is agreed, not yet done. Each entry states what is measured, what the 
 and what would count as finished — because a TODO that only names a wish is a note to feel good
 about, not a plan.
 
+The last section is the opposite kind of entry: work that was considered and decided against. It sits
+in this file rather than in a separate one because a decision is only worth something where the person
+about to build the un-decided version is already reading, and that person is reading this file.
+
 ---
 
 ## Volcano Separator must not be built for one LLM only — DONE
@@ -515,3 +519,90 @@ feature work; it is the parts no assertion in this repository can reach.
 `mcp.mjs` does not expose the quiesce bindings, and will not by this route: an MCP surface loaded by the
 host should not be able to suspend the heartbeat that keeps the host's own chain alive. The switch lives
 only on `vos web --allow-quiesce`, which is started by a person.
+
+---
+
+## `vos web` is typed by a person, and that lifetime is the design — DECIDED, nothing to build
+
+**Decided:** 2026-11-27 · **Status:** decided against · **Scope:** one command's lifetime, and the two
+mechanisms that could have supervised it
+
+### The decision
+
+`vos web` is a foreground command. A person types it, it listens while that terminal is open, and it ends
+with that terminal. It does **not** come up with the rest of this tool, and the two are independent in
+both directions rather than one of them owning the other.
+
+The four facts behind that sentence, each checkable:
+
+| Direction | What is actually true | Where it is visible |
+| --- | --- | --- |
+| the heartbeat | the scheduled task runs `heal --quiet --require-dsh --signals --redline --custody`, never `web` | `bin/guard-task.vbs` |
+| the activity recorder | its logon task launches the PowerShell watcher and nothing else; there is no HTTP client in that path | `bin/activity-task.vbs` |
+| a repair | never asks this server anything, and does not notice whether it is listening | `lib/supervisor.mjs` contains no `ptc`, `webPort` or `3250` |
+| this server | takes no part in a repair — it dispatches the same read-only tools the MCP surface publishes | `lib/tools.mjs`, shared, not copied |
+| ending it | `SIGINT`/`SIGTERM` release any suspension it holds, close the socket, exit 0 | `bin/cli.mjs`, the end of `case 'web'` |
+
+The last row is the one that makes "manual" a complete answer rather than an abdication: an interrupted
+run is not a leaked one. If a conversation stopped the heartbeat and then the terminal closed, the
+suspension is given back on the way out, because it is the last place that can do it — the handle lives in
+that process's memory and enabling the task back needs a child process the process is about to stop being.
+
+### Why the absence of a service is not a gap, in two independent arguments
+
+**Exposure.** A port that exists only while somebody means to use it is a smaller thing to defend than one
+that is always listening. This surface is not a passive one: `POST /ptc/chat` spends money and sends text
+off the machine, and `--allow-quiesce` adds a tool that can disable the heartbeat. Neither should be
+listening on a machine by default because a launcher was convenient to write. The default start already
+withholds both switches; a start-up that nobody watched would make the question "is it on, and with what?"
+one nobody can answer without opening a terminal — which is where they should have been in the first place.
+
+**Authority.** Anything that supervises this surface has to be able to restart it, and that restart has to
+work in the case where the surface is what is broken. This machine already carries the general form of that
+rule for the host: the thing that restarts must not depend on the thing being restarted. For `web` the
+cheap answer is a login task that starts it once, and that answer is worse than it looks — it cannot tell a
+crashed server from a running one without doing the probing the server itself already does, and if it gains
+the ability to kill a wedged instance it is now a permanently running process holding authority over the one
+that holds `volcano_quiesce`. That is a second supervisor with a reach into the heartbeat, which is the
+shape this project has spent a lot of words removing rather than a small convenience.
+
+There is a third argument, cheaper: nothing would use it. No scheduled caller wants this port, no other
+machine on the network reads it (`127.0.0.1` only), and the page is opened by hand. A means of production
+with no consumer is the defect this project keeps finding; building one deliberately would be a new way to
+arrive at it.
+
+### When this should be revisited
+
+Only when a caller exists that cannot be a person:
+
+- a scheduled job that has a reason to `POST /ptc/run` at a time nobody is at the keyboard;
+- a second machine that is expected to reach it (which would also mean the listener moving off `127.0.0.1`,
+  a separate decision with its own argument);
+- or `vos web` gaining a mode that must outlive the terminal that started it for a reason stated in days,
+  not in convenience.
+
+None of the three exists today. When one does, the shape to prefer is a mode on this same command that
+says what it is doing in its own name — the way `timed` means "keep a timestamped log" and not "stop after
+N seconds" — rather than a task that quietly starts something.
+
+### What this is not
+
+Not a statement that the surface is unimportant, and not a refusal to make starting it convenient. `vos web
+timed` already keeps a log per start under a directory that survives the cleanup which eventually empties
+the temporary one, so a run that went wrong is still on disk after the next one has scrolled the terminal
+away, and the help text names every switch including the two that widen what an agent can do. What is being
+refused is a lifetime nobody chose.
+
+### The mistake this entry exists to prevent
+
+The same class of mistake has already happened in this repository, twice, in this exact form: a thing that
+was deliberately absent read as a thing not yet written. `neverQuarantine` was a field whose name promised
+a safeguard and that nothing consulted — and the fix that stuck was to write down what the field meant
+rather than to wire it up and call the name true. The `--allow-quiesce` switch is missing from the MCP
+surface on purpose, and the sentence saying so is what stops the next person from adding it as an obvious
+omission.
+
+`vos web` not having a service is the third instance. It was correct the whole time and had never been
+stated, which is indistinguishable from unfinished work to anybody who was not in the conversation where
+the decision was made. Now it is stated, and the reasons are attached, so that disagreeing with it means
+arguing with an argument instead of guessing at an intention.

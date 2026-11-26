@@ -177,6 +177,15 @@ agent that can act on its own is a worse failure than one that has to ask.
 | `POST /ptc/run` | `{ "program": "...", "timeoutMs": 30000 }` returns `{ "logs": [...], "value": ... }` |
 | `POST /ptc/chat` | `{ "messages": [...] }` runs the agent loop and returns the answer, the transcript and the steps |
 
+**Nothing starts it, and nothing depends on it.** The heartbeat's scheduled task runs `heal`, never
+`web`; a repair neither consults this server nor notices whether it is up, and the server takes no part
+in a repair. It lives exactly as long as the terminal that typed it — `Ctrl+C` releases any suspension
+it still holds, closes the socket and exits 0 — and that lifetime is the design rather than a gap
+waiting for a service, a login task or a `start` subcommand. Two things follow from it, both intended:
+a port that exists only while somebody means to use it is a smaller thing to defend than one that is
+always listening, and no second process is left running with the authority to stop what this surface
+exists to watch.
+
 Opening `/` in a browser is the same surface with a face: the binding list on the left, a program
 editor on the right, and the logs, value and error of the last run underneath. Its colours are read
 from `bin/panel.json` at request time — the same nine roles and bevel rule the chamber's window draws
