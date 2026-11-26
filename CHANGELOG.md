@@ -37,6 +37,13 @@
     It called `volcano_quiesce_status`, the read-only one, and answered with the resume rule attached. Two
     rounds, 1.9 s. A model given the tools but not the rules would have reached for `quiesce`, because that
     is the name that sounds like the question.
+  - **It also knows the shape of a host repair, including the step it cannot take.** Repairing the host is
+    two halves with a human action in the middle: this agent has no tool that stops the host, on purpose,
+    because that action cuts the session somebody is working in. The brief says so and gives the five steps
+    — look, say what you are about to suspend, ask the person to stop it themselves, resume with the same
+    handle when they come back, then check. Asked to describe the procedure without acting, it answered in
+    one round with no tool calls, named the middle step as one it cannot perform, and left the scheduled
+    task `Ready` with no suspension recorded.
 
 - **`vos web` and an agent inside it: a conversation where the model can use this tool's own hands.** The
   surface used to answer one program per request and nothing else. It also answers `POST /ptc/chat`, which
