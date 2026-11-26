@@ -4192,6 +4192,15 @@ ok('a program cannot add a key to its own args', argFrozen.value?.keys === 'a', 
 const argUndef = await ptc.runProgram({ program: 'return { ok: true, missing: undefined }' })
 ok('a returned object carrying an undefined field is invalid output, not silently trimmed',
   argUndef.error?.kind === 'invalid-output', JSON.stringify(argUndef).slice(0, 120))
+// The refusal has to say where and what to do, not just that something is wrong. This failure happened
+// twice in this repository and both times the field existed on only one branch of a return -- so the
+// message is the difference between a one-line fix and a hunt through a returned object.
+ok('and the message names the offending field and the fix',
+  /value\.missing is undefined/.test(argUndef.error?.message ?? '') && /null or left out/.test(argUndef.error?.message ?? ''),
+  String(argUndef.error?.message).slice(0, 170))
+const argNested = await ptc.runProgram({ program: 'return { a: { b: [1, undefined] } }' })
+ok('a nested one gives a path rather than a direction to look in',
+  /value\.a\.b\[1\] is undefined/.test(argNested.error?.message ?? ''), String(argNested.error?.message).slice(0, 170))
 
 const plugPort = 3257
 const plugTokenFile = join(tmpdir(), 'vos-plugin-token-' + process.pid + '.txt')
