@@ -445,3 +445,45 @@ run showed `hmac=String` and `backupSha256=NULL` side by side, and the answer wa
 Worth keeping: a missing cmdlet quietly becoming `$null` is the same class of defect this tool exists to
 remove. `SilentlyContinue` is right for most of this script and wrong for anything whose absence makes
 an undo impossible.
+
+---
+
+## The programmatic surface has parts that were checked but never watched — OPEN
+
+**Added:** 2026-11-27 · **Status:** open, three items · **Scope:** the ptc surface, its page, the plugin layer
+
+### What is finished
+
+The surface, its credential, the extras file, the quiesce pair and the eight plugins all work, and the
+suite covers them: 714 checks, including a page whose own script is parsed rather than assumed. Two
+things were verified against the real machine once, by hand — the quiesce pair (`ready` → `disabled` →
+`ready`, record cleared) and the plugin layer end to end through the CLI. What is left is not more
+feature work; it is the parts no assertion in this repository can reach.
+
+### What is open
+
+- **Nobody has looked at the page.** Headless Chrome on this machine produces nothing: `--dump-dom`
+  writes zero bytes, `--screenshot` writes no file, under both `--headless` and `--headless=new`, with a
+  fresh profile each time. So the pixel-art constraint that has applied to every surface since
+  2026-10-06 has been checked structurally and never visually. What *is* covered: the palette is read
+  from `bin/panel.json` and the page is asserted to carry those nine values; the plugin list, parameter
+  boxes, badges and heartbeat strip are all asserted in the markup; the script parses.
+  **Finished means:** one real screenshot, compared against the palette and the bevel rule by eye.
+
+- **A plugin with a syntax error is found by clicking it.** `loadPlugins` validates the header and the
+  size, and `runProgram` answers `did not parse` — but only once somebody runs it. Pre-parsing each
+  program at load time would catch it earlier, at the cost of a second parse path that has to stay
+  equivalent to `runProgram`'s wrapping (`(async () => { ... })()`), and a check that disagrees with the
+  runner is worse than a late error. **Finished means:** either that equivalence is written down and
+  tested, or the decision to stay late is recorded here as a decision rather than left as an oversight.
+
+- **No program uses two projects at once yet.** Every part is present — built-in tools, the extras
+  bindings for torikago and nanodesu, a plugin layer that can offer any of them — and no single program
+  has called across that line. Until one does, "vs is a platform for the other projects" is a claim
+  about wiring rather than about use.
+
+### One decision that looks like an omission
+
+`mcp.mjs` does not expose the quiesce bindings, and will not by this route: an MCP surface loaded by the
+host should not be able to suspend the heartbeat that keeps the host's own chain alive. The switch lives
+only on `vsep ptc --allow-quiesce`, which is started by a person.
