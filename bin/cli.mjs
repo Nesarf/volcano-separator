@@ -21,6 +21,7 @@
 
 import { fileURLToPath } from 'node:url'
 import { createWriteStream, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import * as g from '../lib/core.mjs'
 import * as res from '../lib/resources.mjs'
@@ -183,7 +184,7 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
-  web [timed] [--web-port N] [--extras FILE] [--token-file FILE]
+  web [timed] [--web-port N] [--extras FILE] [--token-file FILE] [--log-dir DIR]
                      the web surface. POST /ptc/run carries a program that calls the read-only tool
                      bindings and returns one structured result; POST /ptc/chat carries a conversation,
                      and with --allow-llm the model can call those same tools itself -- which is what
@@ -211,11 +212,12 @@ Options:
                      status" reports. A separate switch from --allow-quiesce on purpose -- changing this
                      machine and spending money are different decisions. Configure it with "vos llm
                      set-key"; with no key every call fails as no-key rather than quietly doing nothing.
-                     timed (the second word) keeps a timestamped log per start under DEFAULTS.logDir,
-                     named vos-web-<yyyyMMdd-HHmmss>.log -- the same convention dsh-web-timed.ps1 uses
-                     for its own logs, so the two sort together in one listing. The point is that the
-                     run which went wrong is still on disk after the next one has scrolled the terminal
-                     away. It does not stop by itself.
+                     timed (the second word) keeps a timestamped log per start, named
+                     vos-web-<yyyyMMdd-HHmmss>.log. The directory is --log-dir, else
+                     ~/.volcano-separator/logs -- deliberately not the temporary directory, because the
+                     point is a log that outlives the cleanup which eventually takes everything there.
+                     The name follows the convention dsh-web-timed.ps1 uses for its own logs, so the two
+                     sort together in one listing. It does not stop by itself.
                      --plugins DIR points at a directory of plugin programs (default: the plugins/
                      directory in this repository; --plugins '' loads none). A plugin is one .js file
                      whose first comment lines are name: / description: / needs:, and whose body is a
@@ -364,15 +366,19 @@ async function main() {
       // went wrong is still on disk after the next one has scrolled the terminal away. It is not a time
       // limit -- that would be a different word, and a different flag.
       const timed = opts._[1] === 'timed'
+      // Not ctx.logDir: that one sits under the temporary directory, and the whole point of `timed` is a log
+      // that outlives the cleanup which eventually takes everything there. `--log-dir` puts it wherever logs
+      // belong on this machine -- D:\DaShaoHuo\logs on this one, beside the dsh ones.
+      const logDir = opts['log-dir'] ? resolve(String(opts['log-dir'])) : join(homedir(), '.volcano-separator', 'logs')
       let logFile = null
       let logStream = null
       if (timed) {
         try {
-          mkdirSync(ctx.logDir, { recursive: true })
-          logFile = join(ctx.logDir, `vos-web-${stamp()}.log`)
+          mkdirSync(logDir, { recursive: true })
+          logFile = join(logDir, `vos-web-${stamp()}.log`)
           logStream = createWriteStream(logFile, { flags: 'a' })
         } catch (e) {
-          if (!opts.json) console.error(C.yellow('WARN') + `: could not open a log file under ${ctx.logDir}: ${e?.message ?? e}`)
+          if (!opts.json) console.error(C.yellow('WARN') + `: could not open a log file under ${logDir}: ${e?.message ?? e}`)
         }
       }
       // The terminal is colourised; a log file should not be. Everything the server itself says goes to both,

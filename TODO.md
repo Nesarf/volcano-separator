@@ -450,7 +450,7 @@ an undo impossible.
 
 ## The programmatic surface has parts that were checked but never watched — OPEN
 
-**Added:** 2026-11-27 · **Status:** open, two items · **Scope:** the ptc surface, its page, the plugin layer
+**Added:** 2026-11-27 · **Status:** open, three items · **Scope:** the web surface, its page, the plugin layer, the agent
 
 ### What is finished
 
@@ -501,9 +501,14 @@ feature work; it is the parts no assertion in this repository can reach.
   runner is worse than a late error. **Finished means:** either that equivalence is written down and
   tested, or the decision to stay late is recorded here as a decision rather than left as an oversight.
 
-- **No program uses two projects at once yet.** Every part is present — built-in tools, the extras
-  bindings for torikago and nanodesu, a plugin layer that can offer any of them — and no single program
-  has called across that line.
+- **The conversation's tool trail is written but never asserted.** Every call a conversation makes is
+  appended to `~/.volcano-separator/chat-tools.ndjson` — the tool, its arguments (with a `vos_ask` prompt
+  reduced to its length), the result size, the round, and whether it was refused. That exists because the
+  page's own step list lives in one browser's storage and the server log carries a count without arguments,
+  so after a heartbeat was stopped there was no way to answer who stopped it. What is missing is a test:
+  the writer is private to the module and reaching it honestly means running a conversation against a
+  provider. **Finished means:** either a fake provider is worth building for this one assertion, or the
+  decision to leave it unasserted is written down here as a decision.
 
 ### One decision that looks like an omission
 

@@ -4,6 +4,22 @@
 
 ### Added
 
+- **A conversation's tool calls are recorded, because a browser's memory is not evidence.** Every call is
+  appended to `~/.volcano-separator/chat-tools.ndjson`: the tool, its arguments (a `vos_ask` prompt reduced
+  to its length), the result size, the round, and whether it was refused. The page keeps a step list beside
+  each reply, but that lives in one browser's storage and disappears with it, and the server log has a count
+  per round with no arguments — so after a heartbeat had been stopped, *who stopped it* was unanswerable
+  from either place.
+  - One rotation at start-up past 2 MB, not a check per write: statting the file on every call would cost
+    more than the file does, and the alternative to a rotation is a file that grows until somebody notices.
+  - **It is written but not asserted**, and that is recorded in `TODO.md` rather than papered over: the
+    writer is private to the module, and reaching it honestly means running a conversation against a
+    provider.
+
+- **`vos web timed` writes somewhere that outlives a cleanup.** The first version put the log under
+  `ctx.logDir`, which resolves to the temporary directory — the opposite of what `timed` is for. It now
+  defaults to `~/.volcano-separator/logs`, with `--log-dir` to put it beside the dsh logs on this machine.
+
 - **The agent is told what this machine is, and what the write tools actually do.** Twenty-four tools behind
   a one-line system prompt is a model that guesses, and a guess with a tool attached is a command. A
   conversation now begins with a brief built from the running server: which port this surface is on, where
