@@ -71,6 +71,36 @@
     scheduled task: a test that disables the real heartbeat changes the thing it measures, and the first
     time it flaked it would leave the machine with no watchdog.
 
+- **Plugins: a program with a name, so the page is usable without writing JavaScript first.** The editor
+  was only useful to somebody who already knew what to type, and every routine question this tool answers
+  — is the daemon healthy, what is running, has anything looked like stealth, is the uv cache holding
+  something in use — is four or five lines that never change. Those lines now live in `plugins/*.js`,
+  are listed on the page, and run with one click.
+  - **No second execution path.** A plugin's body goes through the same `runProgram`: same sandbox, same
+    bindings, same failure taxonomy. This layer adds a name and a way to find it, and nothing else —
+    which is the whole point, because a second path is a second thing to keep in step.
+  - **The metadata is comments.** `// name:`, `// description:`, `// needs:` at the top of the file,
+    rather than a JSON wrapper with the program inside a string. The alternative escapes every quote and
+    every newline in the part a reader most wants to read.
+  - **`needs:` is what keeps the page honest.** A plugin that calls `volcano_quiesce` cannot run unless
+    the server was started with `--allow-quiesce`, and a plugin listed where it cannot work reads as a
+    bug in the tool rather than a switch nobody turned on. It is listed greyed, with the missing binding
+    in its title, instead of disappearing.
+  - **One unreadable plugin does not hide the rest.** A file with no `// name:` line is reported and
+    skipped; a loader that threw on the first one would turn a directory of nine plugins into a
+    directory of none.
+  - Eight ship in the repository: a patrol, the process list, signals, the uv cache plan, the host and
+    daemon ports, the accumulated evidence, and a pair that suspends the heartbeat and gives it back —
+    that pair being the first use of the quiesce bindings for something a person would actually do.
+  - **The page carries the programs inside the document**, so a click never waits for a second request,
+    and the program is put in the editor before it runs: what just executed stays readable and
+    adjustable rather than vanishing with the click that ran it.
+  - **`volcano_quiesce_status` is new** because of that pair: a program that suspends has to end, so the
+    handle has to be readable afterwards or the pairing cannot span two requests. It returns the handle
+    in full, which is the same judgement the auth token makes — a secret is not a border between
+    processes already running as this user — and the live suspension is reported apart from a leftover
+    one, because one of those needs resuming and the other needs a person.
+
 - **`vsep ptc --extras <path>`: external commands as bindings, and only when a file names them.**
   Without the flag they do not exist, and the built-in sixteen are the whole surface. A file rather
   than a handful of hardcoded paths, because *origin* and *dependency* are different things: a resource

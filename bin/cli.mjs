@@ -178,6 +178,12 @@ Options:
                      repair of the host can actually stop it, and restore what they found afterwards.
                      Off by default. The task name is not a parameter -- it can only ever touch its own
                      heartbeat -- and an unreleased suspension is given back when the server stops.
+                     --plugins DIR points at a directory of plugin programs (default: the plugins/
+                     directory in this repository; --plugins '' loads none). A plugin is one .js file
+                     whose first comment lines are name: / description: / needs:, and whose body is a
+                     program the page offers as one click. Same execution path as the editor -- no
+                     second sandbox and no second binding set -- and a plugin whose needs: line names a
+                     binding the server does not expose is listed greyed rather than hidden.
   entity <pid|path|port> <value>
                      everything known about one process, one file or one port, from every surface
                      at once. A port resolves to the pid holding it now, which is the join back to
@@ -313,8 +319,16 @@ async function main() {
       // its own watchdog should have to be asked for by name. The value is compared rather than
       // coerced, because `--allow-quiesce false` is a string and a string is truthy.
       const allowQuiesce = opts['allow-quiesce'] === true || opts['allow-quiesce'] === 'true'
+      // Plugins default to the ones shipped in this repository, because those are the programs written
+      // for this tool's own surface. A directory rather than a compiled-in list, for the same reason
+      // extras are a file: what runs must read nothing outside this repository, and what it offers is
+      // something a person named. `--plugins ''` loads none.
+      const pluginsArg = opts.plugins
+      const pluginsDir = pluginsArg === undefined || pluginsArg === true
+        ? join(PROJECT_DIR, 'plugins')
+        : (pluginsArg ? String(pluginsArg) : null)
       const { createPtcServer, listen, DENIED } = await import('../lib/ptc.mjs')
-      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath, allowQuiesce, taskName: ctx.taskName })
+      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath, tokenPath, allowQuiesce, taskName: ctx.taskName, pluginsDir })
       let addr
       try {
         addr = await listen(server, { webPort: port })
@@ -332,6 +346,7 @@ async function main() {
         console.log(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
         console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
         if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
+        if (server.ptcInfo.plugins) console.log(C.dim(`  plugins : ${server.ptcInfo.plugins} from ${pluginsDir}`))
         console.log(C.dim(`  auth    : POST /ptc/run needs the x-vsep-token header; token file ${server.ptcInfo.tokenPath}`))
         if (server.ptcInfo.quiesce) console.log(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
         else console.log(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))

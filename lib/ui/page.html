@@ -82,6 +82,8 @@ pre {
 pre.err { border-left-color: var(--close); }
 .kind { color: var(--close); }
 .empty { opacity: .5; }
+.bindings li.plugin { cursor: pointer; }
+.bindings li.plugin.disabled { opacity: .45; cursor: default; }
 .warn { color: var(--close); }
 </style>
 </head>
@@ -98,6 +100,10 @@ pre.err { border-left-color: var(--close); }
       <!--PALETTE_WARN-->
       <ul class="bindings" id="bindings"><!--TOOLS--><!--DENIED--></ul>
       <p class="hint">click to insert at the cursor. {{DENIED_COUNT}} excluded.</p>
+      <h2>plugins</h2>
+      <ul class="bindings" id="plugins"><!--PLUGINS--></ul>
+      <p class="hint">click to load and run. A plugin needing a switched-off binding is greyed out.</p>
+      <script type="application/json" id="plugin-data"><!--PLUGIN_DATA--></script>
     </div>
     <div class="pane">
       <h2>program</h2>
@@ -173,7 +179,7 @@ return { ok: s.ok, text: s.text }</textarea>
     }
   }
 
-  document.getElementById('run').addEventListener('click', function () {
+  function runNow() {
     var started = Date.now()
     timing.textContent = 'running'
     result.innerHTML = ''
@@ -195,6 +201,30 @@ return { ok: s.ok, text: s.text }</textarea>
       timing.textContent = 'request failed'
       show({ error: { kind: 'exception', message: String(e && e.message ? e.message : e) } })
     })
+  }
+
+  document.getElementById('run').addEventListener('click', runNow)
+
+  // The plugin list and its programs arrive in one document, so a click never waits for a second
+  // request. Programs live in a JSON block rather than in data attributes: a program is a hundred
+  // lines, and an attribute is not where a hundred lines belong.
+  var pluginData = []
+  try {
+    pluginData = JSON.parse(document.getElementById('plugin-data').textContent || '[]')
+  } catch (e) {
+    pluginData = []
+  }
+
+  document.getElementById('plugins').addEventListener('click', function (ev) {
+    var li = ev.target.closest('li')
+    if (!li || li.getAttribute('data-runnable') !== '1') return
+    var id = li.getAttribute('data-id')
+    var found = pluginData.filter(function (p) { return p.id === id })[0]
+    if (!found) return
+    // The program is put in the editor before it runs, so what just executed is still there to read or
+    // adjust. Running it invisibly would make the editor decorative on the one path that uses it most.
+    program.value = found.program
+    runNow()
   })
 })()
 </script>

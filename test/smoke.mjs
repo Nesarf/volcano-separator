@@ -4067,9 +4067,11 @@ ok('releasing a suspension of an already-disabled task does not enable it',
   rel2.ok === true && w6.state() === 'disabled' && !w6.calls.some((c) => /Enable-ScheduledTask/.test(c)), JSON.stringify(rel2))
 
 const bindingsOn = qs.quiesceFunctions(gate6)
-ok('the two bindings are named the way the discovery list says', Object.keys(bindingsOn).sort().join(',') === 'volcano_quiesce,volcano_resume', Object.keys(bindingsOn).join(','))
-const toolNames = qs.quiesceTools().map((t) => t.name).sort().join(',')
-ok('and the discovery descriptors agree with them', toolNames === 'volcano_quiesce,volcano_resume', toolNames)
+const bindingNames = Object.keys(bindingsOn).sort().join(',')
+ok('the gate exposes exactly three bindings', Object.keys(bindingsOn).length === 3, bindingNames)
+ok('and the discovery descriptors agree with them name for name',
+  qs.quiesceTools().map((t) => t.name).sort().join(',') === bindingNames,
+  qs.quiesceTools().map((t) => t.name).sort().join(','))
 ok('resume declares its handle as required',
   qs.quiesceTools().find((t) => t.name === 'volcano_resume')?.inputSchema?.required?.includes('handle') === true)
 ok('quiesce declares no parameter at all, because the task name is not one',
@@ -4092,6 +4094,67 @@ ok('the default surface is unchanged at sixteen when nothing is handed over',
   ptc.exposedTools().length === 16, String(ptc.exposedTools().length))
 
 rmSync(qDir, { recursive: true, force: true })
+
+// --- plugins: a program with a name ----------------------------------------- //
+// A plugin's whole value is that the page is usable without writing JavaScript first, so what is
+// asserted is what the page needs: a name, a program that reaches the same endpoint, and a `needs:`
+// check that greys a plugin out instead of hiding it. The shipped directory is the real input, and a
+// directory of the test's own holds the deliberately broken files -- one unreadable plugin must not
+// hide the readable ones, which is a property of the loader rather than a nicety.
+section('plugins')
+
+const plug = await import('../lib/plugins.mjs')
+const shipped = plug.loadPlugins(join(here, '..', 'plugins'))
+ok('the shipped plugin directory loads without problems',
+  shipped.plugins.length === 8 && shipped.problems.length === 0,
+  shipped.plugins.length + ' plugins, ' + shipped.problems.length + ' problems')
+ok('every shipped plugin declares a name and carries a program',
+  shipped.plugins.every((p) => p.name && p.program.length > 20))
+
+const quietPlugin = shipped.plugins.find((p) => p.id === 'quiet')
+ok('metadata is read from the comment lines', quietPlugin?.name === '静默心跳', String(quietPlugin?.name))
+ok('needs: becomes a list of binding names',
+  JSON.stringify(quietPlugin?.needs) === JSON.stringify(['volcano_quiesce_status', 'volcano_quiesce']),
+  JSON.stringify(quietPlugin?.needs))
+ok('a plugin with no needs line gets an empty list',
+  shipped.plugins.find((p) => p.id === 'patrol')?.needs.length === 0)
+
+const narrow = plug.pluginsForPage(shipped.plugins, ['volcano_status'])
+ok('a plugin whose bindings are absent is listed rather than hidden',
+  narrow.find((p) => p.id === 'quiet')?.runnable === false, JSON.stringify(narrow.find((p) => p.id === 'quiet')?.missing))
+ok('and it names the bindings it is missing',
+  narrow.find((p) => p.id === 'quiet')?.missing.includes('volcano_quiesce'))
+ok('a plugin that needs nothing is runnable either way',
+  narrow.find((p) => p.id === 'patrol')?.runnable === true)
+
+const plugDir = join(tmpdir(), 'vsep-plugin-smoke-' + process.pid)
+rmSync(plugDir, { recursive: true, force: true })
+mkdirSync(plugDir, { recursive: true })
+writeFileSync(join(plugDir, 'twice.js'), '// name: twice\n// description: one plus one\nreturn { n: 1 + 1 }\n')
+writeFileSync(join(plugDir, 'anon.js'), '// description: no name line\nreturn 1\n')
+const mixed = plug.loadPlugins(plugDir)
+ok('one unreadable plugin does not hide the readable one',
+  mixed.plugins.length === 1 && mixed.plugins[0].id === 'twice' && mixed.problems.length === 1, mixed.problems.join(' | '))
+ok('the problem names the file it came from', /anon\.js/.test(mixed.problems[0] ?? ''))
+ok('a directory that is not there is a problem, not a throw',
+  plug.loadPlugins(join(plugDir, 'missing')).problems.length === 1)
+
+// A click must not wait for a second request, so the document carries the programs itself.
+const pluginPage = uiMod.renderPage({ port: 1, tools: [], plugins: plug.pluginsForPage(mixed.plugins, ['volcano_ps']) })
+ok('the page lists the plugin and marks it runnable',
+  /data-id="twice" data-runnable="1"/.test(pluginPage))
+const pluginBlock = /<script type="application\/json" id="plugin-data">([\s\S]*?)<\/script>/.exec(pluginPage)
+let pluginJson = []
+try {
+  pluginJson = JSON.parse(pluginBlock?.[1] ?? '[]')
+} catch {
+  pluginJson = []
+}
+ok('the JSON block parses and holds the program itself',
+  pluginJson[0]?.program?.includes('1 + 1'), pluginBlock?.[1]?.slice(0, 60))
+ok('and no raw closing tag survives inside it', !(pluginBlock?.[1] ?? '').includes('</script'))
+ok('a page with nothing to offer says so', /no plugins loaded/.test(uiMod.renderPage({ port: 1 })))
+rmSync(plugDir, { recursive: true, force: true })
 
 // --- extras: external commands as bindings ---------------------------------- //
 // The core must keep knowing nothing about any other project, so these are checked with a command

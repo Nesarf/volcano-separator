@@ -267,6 +267,29 @@ command executor and never touches a real scheduled task — a test that disable
 would be a test that changes the thing it measures. The real pair was checked once by hand: `ready` →
 `disabled` → `ready`, with the disk record cleared.
 
+### Plugins
+
+`plugins/*.js` holds programs with names. The page lists them under the binding list and runs one on a
+click. Each file is ordinary JavaScript that goes through the same `POST /ptc/run` path as the editor —
+same sandbox, same bindings, same failure taxonomy — and the three comment lines at the top are what the
+page reads:
+
+```js
+// name: 巡检
+// description: one line the page shows on hover
+// needs: volcano_status, volcano_doctor
+const status = await tools.volcano_status({})
+return { status }
+```
+
+`needs:` is what keeps the page honest. A plugin that calls `volcano_quiesce` cannot run unless the
+server was started with `--allow-quiesce`, and listing it anyway would read as a broken tool rather than
+a switch somebody left off — so it is shown greyed, with the missing binding in its title.
+
+`--plugins DIR` points at another directory, and `--plugins ''` loads none. The default is this
+repository's own, for the same reason extras are a file rather than four paths: what runs reads nothing
+outside this repository, and what it offers is something a person named.
+
 MCP client config:
 
 ```json
