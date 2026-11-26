@@ -4265,6 +4265,14 @@ ok('the script keeps a per-plugin result and repaints it at load',
 ok('it reads a badge before treating the click as a run', /closest\('\.last'\)/.test(plugPage))
 ok('and confirms before the program reaches the editor',
   plugPage.indexOf('window.confirm') < plugPage.indexOf('program.value = found.program'))
+ok('the page marks the conversation as unavailable without the switch', /data-enabled="0"/.test(plugPage))
+const chatOff = await fetch(`http://127.0.0.1:${plugPort}/ptc/chat`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-vos-token': plugToken },
+  body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+})
+ok('the chat route does not exist without --allow-llm', chatOff.status === 404, String(chatOff.status))
+ok('and the refusal says which switch turns it on', /allow-llm/.test(await chatOff.text()), 'the message names the switch')
 await new Promise((done) => plugSrv.close(done))
 rmSync(plugTokenFile, { force: true })
 
@@ -4322,6 +4330,23 @@ ok('a refusal through the binding carries prose as well as fields', await (async
   const r = await llm.llmFunctions(llmCtx).vos_ask({ prompt: 'hi' })
   return r.ok === false && /not answered: network/.test(r.text)
 })())
+
+// The tool loop's entry point. It accepts the two roles `chat` refuses, and checks the one thing a provider
+// rejects outright: a tool result that does not say which call it answers.
+const badRole = await llm.converse(llmCtx, { messages: [{ role: 'system', content: 'x' }] })
+ok('converse refuses a role a real loop would never produce',
+  badRole.ok === false && badRole.kind === 'bad-message', String(badRole.kind))
+const noCallId = await llm.converse(llmCtx, { messages: [{ role: 'tool', content: 'x' }] })
+ok('a tool message without the id it answers is refused',
+  noCallId.kind === 'bad-message' && /tool_call_id/.test(noCallId.why), String(noCallId.why).slice(0, 100))
+const toolEmpty = await llm.converse(llmCtx, { messages: [{ role: 'tool', tool_call_id: 'a', content: '   ' }] })
+ok('a tool message with empty content is refused', toolEmpty.kind === 'bad-message', String(toolEmpty.kind))
+const withTools = await llm.converse(llmCtx, {
+  messages: [{ role: 'user', content: 'hi' }],
+  tools: [{ type: 'function', function: { name: 'x', parameters: { type: 'object', properties: {} } } }],
+})
+ok('offering tools does not change how an unreachable endpoint fails',
+  withTools.kind === 'network', String(withTools.kind))
 
 // --- extras: external commands as bindings ---------------------------------- //
 // The core must keep knowing nothing about any other project, so these are checked with a command

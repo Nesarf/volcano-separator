@@ -139,7 +139,7 @@ Options: `--profile <name>` (default `coding-agent`), `--port <n>` (default `907
 | CLI | `bin/cli.mjs` | humans, scripts, the scheduled task |
 | Library | `lib/core.mjs` | other tools (pure Node, zero dependencies) |
 | MCP | `lib/tools.mjs`, served by `lib/mcp.mjs` | any harness — 17 tools, listed below |
-| PTC | `lib/ptc.mjs`, served by `vos ptc` | one program that sequences several read-only calls |
+| PTC | `lib/ptc.mjs`, served by `vos web` | one program that sequences several read-only calls |
 
 The MCP surface is **read-only apart from `heal`**, and that is the design rather than a stage of
 completion.
@@ -169,12 +169,13 @@ agent that can act on its own is a worse failure than one that has to ask.
 
 ## The programmatic surface
 
-`vos ptc` listens on `127.0.0.1:3250` and answers two routes:
+`vos web` listens on `127.0.0.1:3250` and answers two routes:
 
 | Route | What it does |
 |---|---|
-| `GET /ptc/bindings` | the 16 read-only tools, with the same schemas the MCP surface publishes |
+| `GET /ptc/bindings` | every tool this server exposes, with the same schemas the MCP surface publishes |
 | `POST /ptc/run` | `{ "program": "...", "timeoutMs": 30000 }` returns `{ "logs": [...], "value": ... }` |
+| `POST /ptc/chat` | `{ "messages": [...] }` runs the agent loop and returns the answer, the transcript and the steps |
 
 Opening `/` in a browser is the same surface with a face: the binding list on the left, a program
 editor on the right, and the logs, value and error of the last run underneath. Its colours are read
@@ -227,7 +228,7 @@ as well against a server with no guard at all.
 
 ### External commands, off by default
 
-`vos ptc --extras <path>` adds commands described in a small JSON file to the same `tools`
+`vos web --extras <path>` adds commands described in a small JSON file to the same `tools`
 namespace. Without the flag they do not exist, and the built-in sixteen are the whole surface.
 
 It is a file rather than a handful of hardcoded paths because of the distinction this project keeps
@@ -244,7 +245,7 @@ runs with your authority and the arguments the file gives it.
 
 ### Suspending the heartbeat
 
-`vos ptc --allow-quiesce` adds two more bindings, and they are the only ones that change the machine:
+`vos web --allow-quiesce` adds two more bindings, and they are the only ones that change the machine:
 `volcano_quiesce` disables this tool's scheduled task and returns a handle; `volcano_resume` takes that
 handle and puts the task back. Off by default, and the task name is not a parameter — the only task it
 can ever touch is its own heartbeat.
@@ -347,6 +348,30 @@ from `--allow-quiesce` on purpose: suspending a scheduled task changes this mach
 spends money and sends the prompt off it. Failures come back classified — `no-key`, `network`, `timeout`,
 `http`, `bad-response`, `empty-prompt`, `prompt-too-long` — so a program can decide whether to retry
 instead of guessing.
+
+### Talking to an agent
+
+`POST /ptc/chat` takes a conversation and runs a loop: the model is offered every tool this server
+exposes, calls what it needs, reads the results, and answers. `steps` in the response says which tools
+ran and how large each result was — what the agent said and what it did are two different claims, and
+only one of them is the model's own words.
+
+Three limits bound it: six rounds, four tool calls per round, two minutes. A result over 4000 characters
+is truncated **and the model is told so in the text it reads**, because a silently cut result is a wrong
+answer delivered confidently.
+
+The history belongs to the caller. The server keeps no session, so `vos web` can be restarted without
+ending a conversation. The page stores the list in the browser beside each reply's step list, which is
+stripped before the next request — a display detail that reached the provider would be a failed request
+caused by a decoration.
+
+Without `--allow-llm` the route answers 404 and names the switch.
+
+### `vos web timed`
+
+The usual reason to start this is "have a look for a while", and the usual way that ends is a terminal
+somebody forgot about. `vos web timed` shuts down after `--minutes` (30 by default) through the same path
+Ctrl+C takes — which matters, because that path is where a suspended heartbeat is given back.
 
 MCP client config:
 

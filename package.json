@@ -42,7 +42,7 @@
     "heal": "node bin/cli.mjs heal",
     "doctor": "node bin/cli.mjs doctor",
     "mcp": "node lib/mcp.mjs",
-    "ptc": "node bin/cli.mjs ptc",
+    "web": "node bin/cli.mjs web",
     "commands": "node test/commands.mjs"
   },
   "dependencies": {},

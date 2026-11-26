@@ -4,6 +4,40 @@
 
 ### Added
 
+- **`vos web` and an agent inside it: a conversation where the model can use this tool's own hands.** The
+  surface used to answer one program per request and nothing else. It also answers `POST /ptc/chat`, which
+  runs a real tool loop: the model is handed the same bindings the program runner exposes, calls them,
+  reads the results and answers. One question that needs the machine — *which process is listening on port
+  3250* — takes two rounds, 3.9 s, and comes back with the pid.
+  - **The tools are the bindings, not a second list.** `TOOLS` already publishes a JSON Schema per entry,
+    which is the shape a function call wants, so what goes to the provider is generated from what the
+    server exposes. A switch that is off is a tool the model cannot see; there is nothing to keep in step.
+  - **Three limits, each answering a way this goes wrong.** `maxRounds` 6 stops a model that keeps asking
+    for tools instead of answering. `maxToolCallsPerRound` 4 stops one turn from fanning out into a dozen
+    processes. `budgetMs` 120 s stops the whole thing from outliving the person waiting. A result over 4000
+    characters is truncated **and the model is told so in the text it reads** — a silently cut result is a
+    wrong answer delivered confidently.
+  - **`converse` exists because a loop needs roles `chat` refuses.** An `assistant` turn carrying
+    `tool_calls` and a `tool` turn carrying a result are not a two-party conversation, and loosening `chat`
+    for everyone would have made it accept shapes no plain conversation produces. It checks the one thing a
+    provider rejects outright: a tool message without the id it answers.
+  - **The history lives in the browser.** The server keeps no session, so a restart does not end a
+    conversation and two tabs do not fight over one list. The reply's step list — which tool, how many
+    characters — is stored beside it and **stripped before the next request**, and `converse` rebuilds each
+    message from its three legal fields for the same reason: a display detail that reaches the provider is
+    a failed request caused by a decoration.
+  - **One check in this batch was wrong and a test caught it**: `!content` is false for three spaces, so a
+    whitespace-only tool result sailed past the guard and went to the network. It is `!content.trim()` now,
+    and the assertion that found it is the reason the guard is worth having.
+  - **`vos web timed`** shuts the server down after `--minutes` (30 by default) through the same path Ctrl+C
+    takes. That path is where a suspended heartbeat is given back, so a second shutdown route would have
+    been a second place for that to be forgotten.
+
+- **The command is `vos web`, not `vos ptc`.** `ptc` is the module's vocabulary — programmatic tool calling
+  — and `web` is the thing a person goes looking for. The HTTP paths stay `/ptc/*`: those are a contract
+  with the page and with any script somebody has written, and renaming them to fix a word would break
+  callers for a reason that is not theirs.
+
 - **`vos llm` and `vos_ask`: one model call, configured rather than assumed.** The tool could describe a
   machine but never ask anything about it, so "have a model look at this" was a script somebody kept
   rewriting. It is now four subcommands — status, set-key, forget, ask — plus one binding behind
@@ -38,7 +72,7 @@
     supplies one as a value and points the endpoint at a closed port, because a suite that spends money on
     every run is a suite people switch off.
 
-- **`vos ptc`: one request carries a program, and the program sequences the read-only tools.** The
+- **`vos web`: one request carries a program, and the program sequences the read-only tools.** The
   MCP surface answers one tool per round trip, which puts a repair that is really "check, act, check
   again" into the caller's head. A program puts the sequencing where it can be read and tested:
 
@@ -173,7 +207,7 @@
     processes already running as this user — and the live suspension is reported apart from a leftover
     one, because one of those needs resuming and the other needs a person.
 
-- **`vos ptc --extras <path>`: external commands as bindings, and only when a file names them.**
+- **`vos web --extras <path>`: external commands as bindings, and only when a file names them.**
   Without the flag they do not exist, and the built-in sixteen are the whole surface. A file rather
   than a handful of hardcoded paths, because *origin* and *dependency* are different things: a resource
   may be produced in another checkout as long as what runs reads nothing outside its own repository. A

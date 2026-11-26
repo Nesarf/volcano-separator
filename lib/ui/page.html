@@ -97,6 +97,15 @@ input.param:disabled { opacity: .5; }
   border: 1px solid var(--frame-light); opacity: .75;
 }
 .last:hover { opacity: 1; }
+.chat { margin: 2px; padding: 6px; background: var(--well); border-top: 2px solid var(--frame-dark); }
+.chat h2 { margin: 0 0 6px; font-size: 11px; font-weight: normal; letter-spacing: 1px; color: var(--content-text); opacity: .7; text-transform: uppercase; }
+.messages { max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+.msg { padding: 3px 5px; white-space: pre-wrap; word-break: break-word; background: var(--content); border-left: 2px solid var(--frame-light); }
+.msg.user { border-left-color: var(--title); }
+.msg.assistant { border-left-color: var(--close); }
+.msg .who { opacity: .55; margin-right: 6px; }
+#ask { flex: 1; font: inherit; padding: 2px 4px; background: var(--content); color: var(--content-text); border: 1px solid var(--frame-dark); outline: 1px solid var(--frame-light); }
+.chat[data-enabled="0"] #ask, .chat[data-enabled="0"] #send, .chat[data-enabled="0"] #clearChat { opacity: .4; }
 .warn { color: var(--close); }
 </style>
 </head>
@@ -130,6 +139,20 @@ return { ok: s.ok, text: s.text }</textarea>
         <span class="hint" id="timing"></span>
       </div>
       <div class="result" id="result"></div>
+    </div>
+  </div>
+  <!-- the conversation lives in this browser, not on the server: a restart does not end it and a reload
+       restores it. When the capability is off this window still appears and says so, because a window
+       that simply vanishes reads as a bug rather than as a switch somebody left off. -->
+  <div class="chat" id="chat" data-enabled="{{LLM}}">
+    <h2>agent</h2>
+    <p class="hint" id="chatOff" style="display:none">the conversation needs --allow-llm: start the server with it and this window talks.</p>
+    <div class="messages" id="messages"></div>
+    <div class="row">
+      <input id="ask" type="text" placeholder="say something…" autocomplete="off">
+      <button id="send" type="button">send</button>
+      <button id="clearChat" type="button">clear</button>
+      <span class="hint" id="chatTiming"></span>
     </div>
   </div>
 </div>
@@ -197,6 +220,12 @@ return { ok: s.ok, text: s.text }</textarea>
   // button is not attached to anything and is not stored. That is the whole difference between the two
   // paths again, and it is on purpose -- "which plugin was this" has no answer for a program somebody
   // typed.
+  // One place reads the credential. Two would be two chances for one of them to miss a rename, and that
+  // is exactly what happened when this file kept the header name while the server's had moved.
+  function token() {
+    return document.querySelector('meta[name="vos-token"]').getAttribute('content')
+  }
+
   function runNow(runArgs, pluginId) {
     var started = Date.now()
     timing.textContent = 'running'
@@ -205,9 +234,7 @@ return { ok: s.ok, text: s.text }</textarea>
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        // Read from the document rather than written here: the value is generated per install, so a
-        // literal in this file would be a token valid only on the machine it was typed on.
-        'x-vos-token': document.querySelector('meta[name="vos-token"]').getAttribute('content')
+        'x-vos-token': token()
       },
       body: JSON.stringify({ program: program.value, args: runArgs || {} })
     }).then(function (r) {
@@ -334,9 +361,143 @@ return { ok: s.ok, text: s.text }</textarea>
     runNow(runArgs, id)
   })
 
+  // --- the conversation ------------------------------------------------------- //
+  // The history lives here, in this browser, and goes up whole on every turn. The server keeps no session:
+  // a restart would otherwise end a conversation, and two tabs would fight over one list. Same reasoning as
+  // the plugin badges -- the browser is already where this page keeps what it knows.
+  var CHAT_KEY = 'vos.chat'
+  var chatBox = document.getElementById('chat')
+  var messagesEl = document.getElementById('messages')
+  var askBox = document.getElementById('ask')
+  var chatTiming = document.getElementById('chatTiming')
+
+  function chatLoad() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(CHAT_KEY) || '[]')
+      if (!Array.isArray(raw)) return []
+      return raw.filter(function (m) {
+        return m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant')
+      })
+    } catch (e) {
+      return []
+    }
+  }
+
+  function chatSave(list) {
+    try {
+      // The last forty messages. A conversation that grows without a bound is a request that grows until
+      // the provider refuses it, and that refusal would arrive after somebody had typed six turns.
+      localStorage.setItem(CHAT_KEY, JSON.stringify(list.slice(-40)))
+    } catch (e) {
+      /* storage refused -- the conversation still works, it just forgets */
+    }
+  }
+
+  function chatPaint() {
+    var list = chatLoad()
+    messagesEl.innerHTML = ''
+    if (!list.length) {
+      var empty = document.createElement('p')
+      empty.className = 'empty'
+      empty.textContent = chatBox.getAttribute('data-enabled') === '1' ? 'nothing said yet' : 'not available on this server'
+      messagesEl.appendChild(empty)
+      return
+    }
+    for (var i = 0; i < list.length; i++) {
+      var row = document.createElement('div')
+      row.className = 'msg ' + list[i].role
+      var who = document.createElement('span')
+      who.className = 'who'
+      who.textContent = list[i].role === 'user' ? 'you' : 'agent'
+      row.appendChild(who)
+      row.appendChild(document.createTextNode(list[i].content))
+      // Which tools the reply used, kept beside it rather than folded into the text: what the agent said and
+      // what it did are two different claims, and only one of them is the model's own words.
+      if (Array.isArray(list[i].steps) && list[i].steps.length) {
+        var used = document.createElement('div')
+        used.className = 'who'
+        used.textContent = 'used: ' + list[i].steps.map(function (s) { return s.tool + '(' + s.chars + ' chars)' }).join(', ')
+        row.appendChild(used)
+      }
+      messagesEl.appendChild(row)
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight
+  }
+
+  function chatSend() {
+    if (chatBox.getAttribute('data-enabled') !== '1') return
+    var text = String(askBox.value || '').trim()
+    if (!text) return
+    var list = chatLoad()
+    list.push({ role: 'user', content: text })
+    chatSave(list)
+    chatPaint()
+    askBox.value = ''
+    chatTiming.textContent = 'thinking'
+    var started = Date.now()
+    fetch('/ptc/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-vos-token': token() },
+      // Only role and content go up. The step list stays here -- it records what happened rather than what
+      // the model said, and sending it back would invite the model to read its own transcript as context.
+      body: JSON.stringify({ messages: chatLoad().map(function (m) { return { role: m.role, content: m.content } }) })
+    }).then(function (r) {
+      return r.json().then(function (b) { return { status: r.status, body: b } })
+    }).then(function (r) {
+      chatTiming.textContent = r.status + ' in ' + (Date.now() - started) + ' ms'
+      if (r.body && r.body.ok === true && typeof r.body.text === 'string') {
+        var now = chatLoad()
+        // The step list is kept beside the reply and stripped before the next request: it is a record for the
+        // person reading, not something the model said.
+        var steps = Array.isArray(r.body.steps)
+          ? r.body.steps.map(function (s) { return { tool: s.tool, chars: s.chars } })
+          : []
+        now.push({ role: 'assistant', content: r.body.text, steps: steps })
+        chatSave(now)
+        chatPaint()
+      } else {
+        // Not stored. A failure is not part of the conversation, and keeping it would send it back to the
+        // model on the next turn as though somebody had said it.
+        var kind = (r.body && r.body.kind) || (r.body && r.body.error && r.body.error.kind) || 'failed'
+        var why = (r.body && r.body.why) || (r.body && r.body.error && r.body.error.message) || ''
+        chatTiming.textContent = kind + (why ? ' -- ' + why : '')
+      }
+    }).catch(function (e) {
+      chatTiming.textContent = 'request failed: ' + String(e && e.message ? e.message : e)
+    })
+  }
+
+  function chatStart() {
+    if (chatBox.getAttribute('data-enabled') !== '1') {
+      document.getElementById('chatOff').style.display = ''
+      askBox.disabled = true
+      document.getElementById('send').disabled = true
+      document.getElementById('clearChat').disabled = true
+    }
+    document.getElementById('send').addEventListener('click', chatSend)
+    document.getElementById('clearChat').addEventListener('click', function () {
+      try {
+        localStorage.removeItem(CHAT_KEY)
+      } catch (e) {
+        /* nothing to clear */
+      }
+      chatTiming.textContent = ''
+      chatPaint()
+    })
+    // Enter sends, Shift+Enter does not. This box is one line, so there is nowhere for a second one to go.
+    askBox.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault()
+        chatSend()
+      }
+    })
+    chatPaint()
+  }
+
   // Badges are drawn from storage at load time, so a reload shows what ran before it rather than an
   // empty column that makes every plugin look untried.
   paintLast()
+  chatStart()
 })()
 </script>
 </body>

@@ -173,10 +173,12 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
-  ptc [--web-port N] [--extras FILE] [--token-file FILE]
-                     the programmatic surface. POST /ptc/run carries a program that calls the
-                     read-only tool bindings and returns one structured result; GET /ptc/bindings
-                     lists them with schemas. Listens on DEFAULTS.webPort (3250), which is not the
+  web [timed] [--web-port N] [--minutes N] [--extras FILE] [--token-file FILE]
+                     the web surface. POST /ptc/run carries a program that calls the read-only tool
+                     bindings and returns one structured result; POST /ptc/chat carries a conversation,
+                     and with --allow-llm the model can call those same tools itself -- which is what
+                     makes it an agent rather than a chat window. GET /ptc/bindings lists the tools with
+                     schemas. Listens on DEFAULTS.webPort (3250), which is not the
                      daemon's port -- killDaemonTree walks up from the daemon's port owner, and
                      sharing one number would put this tool at the base of its own recovery walk.
                      --web-port rather than --port, because --port already means the daemon's.
@@ -187,8 +189,10 @@ Options:
                      ever carries a CORS header, which is what keeps a browser page out.
                      --extras names a JSON file of external commands to expose as bindings; without
                      it the built-in tools are the whole list.
-                     --allow-quiesce adds volcano_quiesce / volcano_resume, the only two bindings that
-                     change machine state: they disable THIS tool's heartbeat (its scheduled task) so a
+                     --allow-quiesce adds volcano_quiesce / volcano_resume / volcano_quiesce_status --
+                     the only bindings that change machine state, plus the read-only one that lets two
+                     requests pair up, because a program that suspends has to end. They disable THIS
+                     tool's heartbeat (its scheduled task) so a
                      repair of the host can actually stop it, and restore what they found afterwards.
                      Off by default. The task name is not a parameter -- it can only ever touch its own
                      heartbeat -- and an unreleased suspension is given back when the server stops.
@@ -197,6 +201,10 @@ Options:
                      status" reports. A separate switch from --allow-quiesce on purpose -- changing this
                      machine and spending money are different decisions. Configure it with "vos llm
                      set-key"; with no key every call fails as no-key rather than quietly doing nothing.
+                     timed (the second word) shuts the server down after --minutes (default 30), through
+                     the same path Ctrl+C takes. That path is not a detail: it is where a suspended
+                     heartbeat is given back, and a second shutdown route would be a second place for
+                     that to be forgotten.
                      --plugins DIR points at a directory of plugin programs (default: the plugins/
                      directory in this repository; --plugins '' loads none). A plugin is one .js file
                      whose first comment lines are name: / description: / needs:, and whose body is a
@@ -325,41 +333,48 @@ async function main() {
       process.exit(r.ok ? 0 : 1)
     }
 
-    case 'ptc': {
-      // The programmatic surface: one HTTP request carries a program, the program calls the read-only
-      // tool bindings, one structured result comes back. A repair that is "check, act, check again"
-      // is then one request instead of three round trips, and the sequencing is somewhere testable.
+    case 'web': {
+      // One HTTP request carries a program or a conversation; a program calls the read-only tool bindings
+      // and one structured result comes back. A repair that is "check, act, check again" is then one
+      // request instead of three round trips, and the sequencing is somewhere testable.
       //
-      // It listens on `ctx.webPort`, deliberately a different number from `ctx.port`: killDaemonTree
-      // walks up the parent chain from whoever owns the daemon port, so sharing one would put this
-      // tool at the base of its own recovery walk.
+      // It listens on `ctx.webPort`, deliberately a different number from `ctx.port`: killDaemonTree walks
+      // up the parent chain from whoever owns the daemon port, so sharing one would put this tool at the
+      // base of its own recovery walk.
       //
-      // The switch is `--web-port`, not `--port`. `--port` is consumed earlier by resolveContext and
-      // means the DAEMON's port; reusing it here made `ptc --port 3250` rewrite ctx.port as well,
-      // which would have pointed every later recovery at the wrong port owner. A second meaning for
-      // an existing flag is how a convenience becomes a defect.
+      // The switch is `--web-port`, not `--port`. `--port` is consumed earlier by resolveContext and means
+      // the DAEMON's port; reusing it here made `ptc --port 3250` rewrite ctx.port as well, which would have
+      // pointed every later recovery at the wrong port owner. A second meaning for an existing flag is how a
+      // convenience becomes a defect.
+      //
+      // `web timed` exists because the usual reason to start this is "have a look for a while", and the usual
+      // way that ends is a terminal somebody forgot about. It shuts down after `--minutes` (30 by default)
+      // through the same path Ctrl+C takes -- which matters, because that path is what gives a suspended
+      // heartbeat back.
+      const timed = opts._[1] === 'timed'
+      const minutes = Number(opts.minutes) > 0 ? Number(opts.minutes) : 30
       const port = Number(opts['web-port']) || ctx.webPort
-      // `--extras` is the only way external commands reach this surface. Omitting it leaves the
-      // built-in sixteen as the whole list, which is the default on purpose: the file names commands
-      // that run with this user's authority, so naming it is a decision rather than an accident.
+      // `--extras` is the only way external commands reach this surface. Omitting it leaves the built-ins as
+      // the whole list, which is the default on purpose: the file names commands that run with this user's
+      // authority, so naming it is a decision rather than an accident.
       const extrasPath = opts.extras ? String(opts.extras) : null
-      // Where POST /ptc/run reads its credential. Default is `<home>/.volcano-separator/ptc.token`,
-      // which is already restricted to this user on every platform; the switch is for a caller that
-      // manages its own secret directory. Nothing prints the value -- see the auth line below.
+      // Where POST /ptc/run reads its credential. Default is `<home>/.volcano-separator/ptc.token`, which is
+      // already restricted to this user on every platform; the switch is for a caller that manages its own
+      // secret directory. Nothing prints the value -- see the auth line below.
       const tokenPath = opts['token-file'] ? String(opts['token-file']) : null
-      // The two write bindings are off unless this switch is given, and their absence is the default
-      // rather than a hidden mode: `volcano_quiesce` disables the heartbeat, and a tool that can stop
-      // its own watchdog should have to be asked for by name. The value is compared rather than
-      // coerced, because `--allow-quiesce false` is a string and a string is truthy.
+      // The two write bindings are off unless this switch is given, and their absence is the default rather
+      // than a hidden mode: `volcano_quiesce` disables the heartbeat, and a tool that can stop its own
+      // watchdog should have to be asked for by name. The value is compared rather than coerced, because
+      // `--allow-quiesce false` is a string and a string is truthy.
       const allowQuiesce = opts['allow-quiesce'] === true || opts['allow-quiesce'] === 'true'
       // A second switch, because these are different decisions: suspending a scheduled task changes this
-      // machine, and a model call spends money and sends the prompt off it. A person who wants one of
-      // those should not have to accept the other.
+      // machine, and a model call spends money and sends the prompt off it. A person who wants one of those
+      // should not have to accept the other.
       const allowLlm = opts['allow-llm'] === true || opts['allow-llm'] === 'true'
-      // Plugins default to the ones shipped in this repository, because those are the programs written
-      // for this tool's own surface. A directory rather than a compiled-in list, for the same reason
-      // extras are a file: what runs must read nothing outside this repository, and what it offers is
-      // something a person named. `--plugins ''` loads none.
+      // Plugins default to the ones shipped in this repository, because those are the programs written for
+      // this tool's own surface. A directory rather than a compiled-in list, for the same reason extras are a
+      // file: what runs must read nothing outside this repository, and what it offers is something a person
+      // named. `--plugins ''` loads none.
       const pluginsArg = opts.plugins
       const pluginsDir = pluginsArg === undefined || pluginsArg === true
         ? join(PROJECT_DIR, 'plugins')
@@ -376,35 +391,48 @@ async function main() {
         process.exit(1)
       }
       if (opts.json) {
-        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, ...server.ptcInfo }))
+        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, timed, minutes: timed ? minutes : null, ...server.ptcInfo }))
       } else {
-        console.log(`${C.green('ok')} ptc: listening on http://${addr.address}:${addr.port}`)
+        console.log(`${C.green('ok')} web: listening on http://${addr.address}:${addr.port}`)
         console.log(C.dim(`  GET  /ptc/bindings   ${server.ptcInfo.tools} tool(s), with schemas`))
         console.log(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
+        if (server.ptcInfo.llm) console.log(C.dim('  POST /ptc/chat       { "messages": [{ "role": "user", "content": "..." }] } -- tools included'))
         console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
         if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
         if (server.ptcInfo.plugins) console.log(C.dim(`  plugins : ${server.ptcInfo.plugins} from ${pluginsDir}`))
-        console.log(C.dim(`  auth    : POST /ptc/run needs the x-vos-token header; token file ${server.ptcInfo.tokenPath}`))
+        console.log(C.dim(`  auth    : POST needs the x-vos-token header; token file ${server.ptcInfo.tokenPath}`))
         if (server.ptcInfo.quiesce) console.log(C.dim(`  quiesce : volcano_quiesce / volcano_resume may disable ${ctx.taskName}, and put it back`))
         else console.log(C.dim('  quiesce : off -- --allow-quiesce lets a program suspend the heartbeat'))
         if (server.ptcInfo.llm) console.log(C.dim('  llm     : vos_ask may call a model; the prompt leaves this machine and it costs money'))
         else console.log(C.dim('  llm     : off -- --allow-llm lets a program call a model'))
+        if (timed) console.log(C.dim(`  timed   : shuts itself down in ${minutes} minute(s), through the same path Ctrl+C takes`))
         console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
       }
-      // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an
-      // open handle would too, but relying on that makes the exit path implicit.
+      // Stay up until interrupted, or until a timed run's clock runs out. Nothing else keeps the loop alive
+      // on purpose: a server with an open handle would too, but relying on that makes the exit path implicit.
+      let timer = null
       await new Promise((resolve) => {
         process.once('SIGINT', resolve)
         process.once('SIGTERM', resolve)
+        if (timed) {
+          timer = setTimeout(() => {
+            if (!opts.json) {
+              console.log('')
+              console.log(C.dim(`web: ${minutes} minute(s) are up`))
+            }
+            resolve()
+          }, minutes * 60 * 1000)
+        }
       })
-      // Give a suspension back before this process goes away. This is the only place that can: the
-      // handle lives in this process's memory, and enabling a scheduled task needs a child process that
-      // this one is about to stop being.
-      const released = await server.releaseQuiesce('ptc server stopping')
-      if (released.released) console.log(C.dim('ptc: the heartbeat suspension was released'))
+      if (timer) clearTimeout(timer)
+      // Give a suspension back before this process goes away. This is the only place that can: the handle
+      // lives in this process's memory, and enabling a scheduled task needs a child process that this one is
+      // about to stop being.
+      const released = await server.releaseQuiesce('web server stopping')
+      if (released.released) console.log(C.dim('web: the heartbeat suspension was released'))
       else if (released.ok === false) console.error(C.red('WARN') + `: could not release the heartbeat suspension: ${released.why}`)
       await new Promise((resolve) => server.close(resolve))
-      console.log(C.dim('ptc: closed'))
+      console.log(C.dim('web: closed'))
       process.exit(0)
     }
 

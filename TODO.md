@@ -71,7 +71,7 @@ The CLI switch is `--web-port` for the same reason `--port` is left alone: `--po
 recovery looks for.
 
 **What landed on 2026-11-27, and the three defects that only showed up while landing it.** The
-programmatic surface (`vos ptc`, `lib/ptc.mjs`) answers `GET /ptc/bindings` and `POST /ptc/run`, and
+programmatic surface (`vos web`, `lib/ptc.mjs`) answers `GET /ptc/bindings` and `POST /ptc/run`, and
 its bindings are generated from the same `TOOLS` the MCP server publishes -- which is why the tool
 surface moved out of `lib/mcp.mjs` into `lib/tools.mjs` instead of being copied. `mcp.mjs` keeps the
 stdio loop and re-exports, so nothing that imported it broke.
@@ -509,4 +509,4 @@ feature work; it is the parts no assertion in this repository can reach.
 
 `mcp.mjs` does not expose the quiesce bindings, and will not by this route: an MCP surface loaded by the
 host should not be able to suspend the heartbeat that keeps the host's own chain alive. The switch lives
-only on `vos ptc --allow-quiesce`, which is started by a person.
+only on `vos web --allow-quiesce`, which is started by a person.
