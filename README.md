@@ -305,6 +305,22 @@ One boundary that surprises people: returning nothing is fine (it is a run that 
 returned object carrying a single `undefined` field is `invalid-output`. Trimming the field would be a
 silent edit of what the program said.
 
+A plugin that changes something can ask first:
+
+```js
+// confirm: 这一下会改计划任务的状态，确定要动吗？
+```
+
+The question is shown before the program reaches the editor or leaves the page, so a cancel leaves the
+editor holding what it held. `heartbeat` needs one because it decides its own direction — which is also
+why its sentence describes both directions rather than one.
+
+Each plugin's last result is kept in the page's own storage and shows up as a badge: when it ran, and
+whether it worked. Clicking the badge puts that result back under the editor without running anything,
+which is the difference between "I forgot what it said" and "run it again and hope it says the same".
+A result too large to keep is remembered as omitted; the editor's own run button stores nothing, since
+there is no plugin identity to file it under.
+
 `--plugins DIR` points at another directory, and `--plugins ''` loads none. The default is this
 repository's own, for the same reason extras are a file rather than four paths: what runs reads nothing
 outside this repository, and what it offers is something a person named.

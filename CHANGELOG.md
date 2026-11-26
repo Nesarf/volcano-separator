@@ -105,6 +105,19 @@
     but a returned object carrying a single `undefined` field makes the whole result `invalid-output`.
     Trimming the field would be a silent edit of what the program said, and the first version of the
     argument test read its own `undefined` back and reported the wrong thing because of it.
+  - **`confirm:` asks before a click becomes a change.** The sentence is shown before the program is put
+    in the editor or sent, so a refused confirmation leaves the editor exactly as it was — a cancel that
+    had already overwritten the editor would look like something happened. The heartbeat plugin needs one
+    because it picks its own direction, so its sentence has to hold for both: a question that only named
+    the suspend case would be wrong half the times it was asked.
+  - **A plugin's last result is kept, per plugin, in the page's own storage.** A badge shows when it ran
+    and whether it worked; clicking the badge shows that result again without running anything. Nothing
+    is sent to the server to support it, and a result too large to keep is remembered as *omitted* rather
+    than dropped without a trace. The editor's run button stores nothing, because "which plugin was
+    this" has no answer for a program somebody typed.
+  - **The page's own script now gets parsed by the suite.** It is still never executed — this machine has
+    no browser that renders — but a syntax error in it used to appear only when a person opened the page,
+    and after a hundred lines of front-end work that is not a check at all.
   - **The page carries the programs inside the document**, so a click never waits for a second request,
     and the program is put in the editor before it runs: what just executed stays readable and
     adjustable rather than vanishing with the click that ran it.

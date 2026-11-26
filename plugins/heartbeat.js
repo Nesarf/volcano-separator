@@ -1,6 +1,7 @@
 // name: 心跳
 // description: 一个按钮，两个方向。心跳还着就停掉它（为停宿主做准备），停着就还回去——方向由当前状态决定，不需要先判断再点
 // needs: volcano_quiesce, volcano_resume, volcano_quiesce_status
+// confirm: 这一下会改计划任务的状态：要么停掉心跳、要么把它还回去。方向由当前状态决定，按下之前只看得到这一句——确定要动吗？
 const s = await tools.volcano_quiesce_status({})
 
 if (s.live) {

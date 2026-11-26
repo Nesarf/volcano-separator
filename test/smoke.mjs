@@ -4118,6 +4118,12 @@ ok('needs: becomes a list of binding names',
   JSON.stringify(beat?.needs))
 ok('a plugin with no needs line gets an empty list',
   shipped.plugins.find((p) => p.id === 'patrol')?.needs.length === 0)
+ok('a plugin can declare a confirmation sentence', typeof beat?.confirm === 'string' && beat.confirm.length > 10, String(beat?.confirm).slice(0, 40))
+ok('a plugin that does not want to be asked has none', shipped.plugins.find((p) => p.id === 'patrol')?.confirm === null)
+// The heartbeat decides its own direction, so its sentence has to hold for both of them: a question that
+// only describes the suspend case would be wrong half the time it is asked.
+ok('the confirmation covers both directions rather than one of them',
+  /停掉/.test(beat?.confirm ?? '') && /还/.test(beat?.confirm ?? ''))
 ok('params: becomes a name and a default, both as text',
   JSON.stringify(shipped.plugins.find((p) => p.id === 'host')?.params) === JSON.stringify([{ name: 'port', default: '3080' }]),
   JSON.stringify(shipped.plugins.find((p) => p.id === 'host')?.params))
@@ -4215,6 +4221,25 @@ const plugList = await (await fetch(`http://127.0.0.1:${plugPort}/ptc/plugins`))
 ok('params travel to the discovery endpoint too',
   JSON.stringify(plugList.plugins.find((p) => p.id === 'host')?.params) === JSON.stringify([{ name: 'port', default: '3080' }]))
 ok('the merged plugin is runnable when the switch is on', plugList.plugins.find((p) => p.id === 'heartbeat')?.runnable === true)
+ok('the confirmation reaches the markup as an attribute', /data-confirm="[^"]*计划任务/.test(plugPage))
+ok('a plugin without one gets no attribute', !/data-id="patrol"[^>]*data-confirm/.test(plugPage))
+
+// The page's own script is never executed here -- there is no browser on this machine that renders -- but
+// it can be parsed, and that is the difference between "the front end was checked" and "the front end was
+// typed". A syntax error in it would otherwise appear only when a person opened the page.
+const vmMod = await import('node:vm')
+let pageScriptError = null
+try {
+  new vmMod.Script(/<script>([\s\S]*?)<\/script>/.exec(plugPage)?.[1] ?? '', { filename: 'page-script.js' })
+} catch (e) {
+  pageScriptError = e?.message ?? String(e)
+}
+ok('the page script parses as JavaScript', pageScriptError === null, pageScriptError ?? '')
+ok('the script keeps a per-plugin result and repaints it at load',
+  /vsep\.last\./.test(plugPage) && /paintLast\(\)/.test(plugPage))
+ok('it reads a badge before treating the click as a run', /closest\('\.last'\)/.test(plugPage))
+ok('and confirms before the program reaches the editor',
+  plugPage.indexOf('window.confirm') < plugPage.indexOf('program.value = found.program'))
 await new Promise((done) => plugSrv.close(done))
 rmSync(plugTokenFile, { force: true })
 

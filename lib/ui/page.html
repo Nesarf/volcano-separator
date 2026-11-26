@@ -91,6 +91,12 @@ input.param {
   border: 1px solid var(--frame-light);
 }
 input.param:disabled { opacity: .5; }
+.last {
+  margin-left: 6px; padding: 0 3px; cursor: pointer;
+  color: var(--content-text); background: var(--title);
+  border: 1px solid var(--frame-light); opacity: .75;
+}
+.last:hover { opacity: 1; }
 .warn { color: var(--close); }
 </style>
 </head>
@@ -187,7 +193,11 @@ return { ok: s.ok, text: s.text }</textarea>
     }
   }
 
-  function runNow(runArgs) {
+  // `pluginId` is what makes a result rememberable: the editor has no plugin identity, so a run from this
+  // button is not attached to anything and is not stored. That is the whole difference between the two
+  // paths again, and it is on purpose -- "which plugin was this" has no answer for a program somebody
+  // typed.
+  function runNow(runArgs, pluginId) {
     var started = Date.now()
     timing.textContent = 'running'
     result.innerHTML = ''
@@ -205,13 +215,70 @@ return { ok: s.ok, text: s.text }</textarea>
     }).then(function (r) {
       timing.textContent = r.status + ' in ' + (Date.now() - started) + ' ms'
       show(r.body)
+      if (pluginId) remember(pluginId, r.status, r.body)
     }).catch(function (e) {
       timing.textContent = 'request failed'
-      show({ error: { kind: 'exception', message: String(e && e.message ? e.message : e) } })
+      var body = { error: { kind: 'exception', message: String(e && e.message ? e.message : e) } }
+      show(body)
+      if (pluginId) remember(pluginId, 0, body)
     })
   }
 
-  document.getElementById('run').addEventListener('click', runNow)
+  // Storage is a convenience, so every path through it is allowed to fail quietly: a page that cannot
+  // write localStorage still runs programs, it just forgets. Saying so beats a try/catch that pretends
+  // the feature exists on a browser that refused it.
+  var STORE_PREFIX = 'vsep.last.'
+  var STORE_LIMIT = 200000
+
+  function remember(id, status, body) {
+    try {
+      var record = { at: new Date().toISOString(), status: status, body: body }
+      if (JSON.stringify(record).length > STORE_LIMIT) {
+        record = { at: record.at, status: status, omitted: true }
+      }
+      localStorage.setItem(STORE_PREFIX + id, JSON.stringify(record))
+    } catch (e) {
+      /* storage full or refused -- the run itself already happened */
+    }
+    paintLast()
+  }
+
+  function readLast(id) {
+    try {
+      return JSON.parse(localStorage.getItem(STORE_PREFIX + id) || 'null')
+    } catch (e) {
+      return null
+    }
+  }
+
+  // Redrawn after every run rather than appended to, so a badge never doubles up. A stale badge is worse
+  // than no badge: it claims a result that has since been replaced.
+  function paintLast() {
+    var items = document.querySelectorAll('#plugins li[data-id]')
+    for (var i = 0; i < items.length; i++) {
+      var li = items[i]
+      var old = li.querySelector('.last')
+      if (old) old.parentNode.removeChild(old)
+      var record = readLast(li.getAttribute('data-id'))
+      if (!record) continue
+      var badge = document.createElement('span')
+      badge.className = 'last'
+      var when = ''
+      try {
+        when = new Date(record.at).toLocaleTimeString()
+      } catch (e) {
+        when = ''
+      }
+      badge.textContent = (when ? when + ' ' : '') + (record.status === 200 ? 'ok' : 'fail')
+      badge.title = record.omitted
+        ? 'the result was too large to keep -- click to run again'
+        : 'click to show that result again'
+      badge.setAttribute('data-recall', li.getAttribute('data-id'))
+      li.appendChild(badge)
+    }
+  }
+
+  document.getElementById('run').addEventListener('click', function () { runNow() })
 
   // The plugin list and its programs arrive in one document, so a click never waits for a second
   // request. Programs live in a JSON block rather than in data attributes: a program is a hundred
@@ -224,6 +291,20 @@ return { ok: s.ok, text: s.text }</textarea>
   }
 
   document.getElementById('plugins').addEventListener('click', function (ev) {
+    // Recall comes first. A badge lives inside an item that may belong to a greyed-out plugin, and
+    // reading the last result of something that can no longer run is exactly when it is most useful.
+    var recall = ev.target.closest('.last')
+    if (recall) {
+      var recalled = readLast(recall.getAttribute('data-recall'))
+      if (!recalled) return
+      if (recalled.omitted) {
+        timing.textContent = 'that result was too large to keep'
+        return
+      }
+      timing.textContent = 'from ' + recalled.at
+      show(recalled.body || {})
+      return
+    }
     var li = ev.target.closest('li')
     if (!li || li.getAttribute('data-runnable') !== '1') return
     // A click that landed on a parameter box is somebody typing, not somebody running. Without this the
@@ -232,6 +313,13 @@ return { ok: s.ok, text: s.text }</textarea>
     var id = li.getAttribute('data-id')
     var found = pluginData.filter(function (p) { return p.id === id })[0]
     if (!found) return
+    // Asked before anything runs and before the program reaches the editor: a refused confirmation
+    // should leave the editor holding what it held, so cancelling does not look like a change.
+    var ask = li.getAttribute('data-confirm')
+    if (ask && !window.confirm(ask)) {
+      timing.textContent = 'cancelled'
+      return
+    }
     // Parameters are read at the moment of the click, so what runs is what is on screen. There is no
     // separate "apply" step, because a form with one field and an apply button is two clicks for one
     // decision.
@@ -243,8 +331,12 @@ return { ok: s.ok, text: s.text }</textarea>
     // The program is put in the editor before it runs, so what just executed is still there to read or
     // adjust. Running it invisibly would make the editor decorative on the one path that uses it most.
     program.value = found.program
-    runNow(runArgs)
+    runNow(runArgs, id)
   })
+
+  // Badges are drawn from storage at load time, so a reload shows what ran before it rather than an
+  // empty column that makes every plugin look untried.
+  paintLast()
 })()
 </script>
 </body>
