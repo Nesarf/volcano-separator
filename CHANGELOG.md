@@ -4,6 +4,24 @@
 
 ### Added
 
+- **The agent is told what this machine is, and what the write tools actually do.** Twenty-four tools behind
+  a one-line system prompt is a model that guesses, and a guess with a tool attached is a command. A
+  conversation now begins with a brief built from the running server: which port this surface is on, where
+  the daemon and the host default to, that `volcano_activity` records what happened while `volcano_ps` is
+  only true at the moment it ran, which scheduled task restarts the chain, and the names of the tools it can
+  actually reach.
+  - **The second half matters more than the first.** It states the rules around the write bindings: say what
+    you are about to stop *before* calling `volcano_quiesce`; never use it as a probe, because that is what
+    `volcano_quiesce_status` is for; and always call `volcano_resume` with the handle in the same
+    conversation, since an unreleased suspension leaves the machine unwatched until this server exits.
+  - **Every fact in it comes from the running server**, not from a string in the file. A different port, a
+    missing extras file or an absent `--allow-quiesce` changes what the brief says, so it cannot go stale in
+    a way the code does not notice.
+  - Verified by asking it two questions at once — the heartbeat's state, and what must follow stopping it.
+    It called `volcano_quiesce_status`, the read-only one, and answered with the resume rule attached. Two
+    rounds, 1.9 s. A model given the tools but not the rules would have reached for `quiesce`, because that
+    is the name that sounds like the question.
+
 - **`vos web` and an agent inside it: a conversation where the model can use this tool's own hands.** The
   surface used to answer one program per request and nothing else. It also answers `POST /ptc/chat`, which
   runs a real tool loop: the model is handed the same bindings the program runner exposes, calls them,
