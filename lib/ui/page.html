@@ -84,6 +84,13 @@ pre.err { border-left-color: var(--close); }
 .empty { opacity: .5; }
 .bindings li.plugin { cursor: pointer; }
 .bindings li.plugin.disabled { opacity: .45; cursor: default; }
+.bindings li.plugin .pname { margin-right: 4px; }
+input.param {
+  width: auto; padding: 0 3px; margin-left: 2px;
+  font: inherit; color: var(--content-text); background: var(--well);
+  border: 1px solid var(--frame-light);
+}
+input.param:disabled { opacity: .5; }
 .warn { color: var(--close); }
 </style>
 </head>
@@ -91,6 +98,7 @@ pre.err { border-left-color: var(--close); }
 <div class="shell">
   <div class="titlebar">
     <span class="name">volcano-separator / ptc</span>
+    <span class="port" id="heartbeat">{{HEARTBEAT}}</span>
     <span class="port">127.0.0.1:{{PORT}} v{{VERSION}}</span>
     <span class="close" aria-hidden="true"><i></i></span>
   </div>
@@ -179,7 +187,7 @@ return { ok: s.ok, text: s.text }</textarea>
     }
   }
 
-  function runNow() {
+  function runNow(runArgs) {
     var started = Date.now()
     timing.textContent = 'running'
     result.innerHTML = ''
@@ -191,7 +199,7 @@ return { ok: s.ok, text: s.text }</textarea>
         // literal in this file would be a token valid only on the machine it was typed on.
         'x-vsep-token': document.querySelector('meta[name="vsep-token"]').getAttribute('content')
       },
-      body: JSON.stringify({ program: program.value })
+      body: JSON.stringify({ program: program.value, args: runArgs || {} })
     }).then(function (r) {
       return r.json().then(function (body) { return { status: r.status, body: body } })
     }).then(function (r) {
@@ -218,13 +226,24 @@ return { ok: s.ok, text: s.text }</textarea>
   document.getElementById('plugins').addEventListener('click', function (ev) {
     var li = ev.target.closest('li')
     if (!li || li.getAttribute('data-runnable') !== '1') return
+    // A click that landed on a parameter box is somebody typing, not somebody running. Without this the
+    // first click into the port field would fire the plugin with the old value still in it.
+    if (ev.target.closest('input')) return
     var id = li.getAttribute('data-id')
     var found = pluginData.filter(function (p) { return p.id === id })[0]
     if (!found) return
+    // Parameters are read at the moment of the click, so what runs is what is on screen. There is no
+    // separate "apply" step, because a form with one field and an apply button is two clicks for one
+    // decision.
+    var runArgs = {}
+    var inputs = li.querySelectorAll('input.param')
+    for (var i = 0; i < inputs.length; i++) {
+      runArgs[inputs[i].getAttribute('data-param')] = inputs[i].value
+    }
     // The program is put in the editor before it runs, so what just executed is still there to read or
     // adjust. Running it invisibly would make the editor decorative on the one path that uses it most.
     program.value = found.program
-    runNow()
+    runNow(runArgs)
   })
 })()
 </script>

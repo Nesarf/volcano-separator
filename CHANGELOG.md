@@ -89,9 +89,22 @@
   - **One unreadable plugin does not hide the rest.** A file with no `// name:` line is reported and
     skipped; a loader that threw on the first one would turn a directory of nine plugins into a
     directory of none.
-  - Eight ship in the repository: a patrol, the process list, signals, the uv cache plan, the host and
-    daemon ports, the accumulated evidence, and a pair that suspends the heartbeat and gives it back —
-    that pair being the first use of the quiesce bindings for something a person would actually do.
+  - Eight ship in the repository: a patrol, the process list, signals, the uv cache plan, a port query,
+    an entity query, the accumulated evidence, and **one button for the heartbeat that decides its own
+    direction** — suspend when it is running, give it back when it is suspended. That last one is the
+    first use of the quiesce bindings for something a person would actually do, and it is one button
+    rather than two because "which of these two do I press" is the question the pair existed to remove.
+    The strip in the title bar says which state it is in, read from the live gate at render time, so the
+    page cannot claim "running" while this very server holds the task disabled.
+  - **`args` is how a plugin takes an argument at all**, and `// params: port=3080` is how the page knows
+    to draw a box for it. Everything is text and the program converts what it needs — `Number(args.port)`
+    is one expression, while a type system living in a comment line would need a parser and an error path
+    for a default that disagrees with its own type. `args` is frozen, so a program cannot rewrite the
+    inputs it was given, which would make "what was this called with" unanswerable after the fact.
+  - **One boundary worth stating out loud**: a program that returns nothing is a run that produced logs,
+    but a returned object carrying a single `undefined` field makes the whole result `invalid-output`.
+    Trimming the field would be a silent edit of what the program said, and the first version of the
+    argument test read its own `undefined` back and reported the wrong thing because of it.
   - **The page carries the programs inside the document**, so a click never waits for a second request,
     and the program is put in the editor before it runs: what just executed stays readable and
     adjustable rather than vanishing with the click that ran it.

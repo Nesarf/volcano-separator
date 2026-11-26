@@ -286,6 +286,25 @@ return { status }
 server was started with `--allow-quiesce`, and listing it anyway would read as a broken tool rather than
 a switch somebody left off — so it is shown greyed, with the missing binding in its title.
 
+A plugin can take arguments. Declare them — all text, with an optional default — and the page draws a
+box beside the name:
+
+```js
+// params: port=3080
+const port = String(args.port || '3080')
+const found = await tools.volcano_entity({ kind: 'port', id: port })
+return { port, entity: found }
+```
+
+`args` is frozen and reaches the program as an object, so what ran is still answerable afterwards. The
+editor's own run button sends an empty one: the editor has no parameter boxes, and a program that needs
+arguments there can write them in — that is the difference between the two paths, and it is the whole of
+the difference.
+
+One boundary that surprises people: returning nothing is fine (it is a run that produced logs), but a
+returned object carrying a single `undefined` field is `invalid-output`. Trimming the field would be a
+silent edit of what the program said.
+
 `--plugins DIR` points at another directory, and `--plugins ''` loads none. The default is this
 repository's own, for the same reason extras are a file rather than four paths: what runs reads nothing
 outside this repository, and what it offers is something a person named.

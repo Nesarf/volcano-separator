@@ -4111,19 +4111,28 @@ ok('the shipped plugin directory loads without problems',
 ok('every shipped plugin declares a name and carries a program',
   shipped.plugins.every((p) => p.name && p.program.length > 20))
 
-const quietPlugin = shipped.plugins.find((p) => p.id === 'quiet')
-ok('metadata is read from the comment lines', quietPlugin?.name === '静默心跳', String(quietPlugin?.name))
+const beat = shipped.plugins.find((p) => p.id === 'heartbeat')
+ok('metadata is read from the comment lines', beat?.name === '心跳', String(beat?.name))
 ok('needs: becomes a list of binding names',
-  JSON.stringify(quietPlugin?.needs) === JSON.stringify(['volcano_quiesce_status', 'volcano_quiesce']),
-  JSON.stringify(quietPlugin?.needs))
+  JSON.stringify(beat?.needs) === JSON.stringify(['volcano_quiesce', 'volcano_resume', 'volcano_quiesce_status']),
+  JSON.stringify(beat?.needs))
 ok('a plugin with no needs line gets an empty list',
   shipped.plugins.find((p) => p.id === 'patrol')?.needs.length === 0)
+ok('params: becomes a name and a default, both as text',
+  JSON.stringify(shipped.plugins.find((p) => p.id === 'host')?.params) === JSON.stringify([{ name: 'port', default: '3080' }]),
+  JSON.stringify(shipped.plugins.find((p) => p.id === 'host')?.params))
+ok('a parameter with no default is an empty string rather than undefined',
+  shipped.plugins.find((p) => p.id === 'entity')?.params?.some((p) => p.name === 'id' && p.default === ''),
+  JSON.stringify(shipped.plugins.find((p) => p.id === 'entity')?.params))
+ok('a parameter is a plain identifier or it is dropped',
+  plug.parseParams('good=1, bad-name=2, 9nope=3').map((p) => p.name).join(',') === 'good',
+  plug.parseParams('good=1, bad-name=2, 9nope=3').map((p) => p.name).join(','))
 
 const narrow = plug.pluginsForPage(shipped.plugins, ['volcano_status'])
 ok('a plugin whose bindings are absent is listed rather than hidden',
-  narrow.find((p) => p.id === 'quiet')?.runnable === false, JSON.stringify(narrow.find((p) => p.id === 'quiet')?.missing))
+  narrow.find((p) => p.id === 'heartbeat')?.runnable === false, JSON.stringify(narrow.find((p) => p.id === 'heartbeat')?.missing))
 ok('and it names the bindings it is missing',
-  narrow.find((p) => p.id === 'quiet')?.missing.includes('volcano_quiesce'))
+  narrow.find((p) => p.id === 'heartbeat')?.missing.includes('volcano_quiesce'))
 ok('a plugin that needs nothing is runnable either way',
   narrow.find((p) => p.id === 'patrol')?.runnable === true)
 
@@ -4154,6 +4163,61 @@ ok('the JSON block parses and holds the program itself',
   pluginJson[0]?.program?.includes('1 + 1'), pluginBlock?.[1]?.slice(0, 60))
 ok('and no raw closing tag survives inside it', !(pluginBlock?.[1] ?? '').includes('</script'))
 ok('a page with nothing to offer says so', /no plugins loaded/.test(uiMod.renderPage({ port: 1 })))
+ok('with no capability the heartbeat strip is empty rather than claiming running',
+  !/heartbeat: /.test(uiMod.renderPage({ port: 1, heartbeat: null })))
+
+// args: a plugin takes an argument, and a program is a string with no signature to declare one.
+const argRun = await ptc.runProgram({ program: 'return { got: args.port }', args: { port: '9999' } })
+ok('args reaches the program', argRun.value?.got === '9999', JSON.stringify(argRun).slice(0, 100))
+const argNone = await ptc.runProgram({ program: 'return { keys: Object.keys(args) }' })
+ok('a program called with no args sees an empty object', JSON.stringify(argNone.value?.keys) === '[]')
+const argFrozen = await ptc.runProgram({ program: 'args.hacked = 1; return { keys: Object.keys(args).join(",") }', args: { a: 1 } })
+ok('a program cannot add a key to its own args', argFrozen.value?.keys === 'a', JSON.stringify(argFrozen.value))
+// The boundary worth pinning: "returns nothing" is fine, but one undefined field makes the whole result
+// invalid. Trimming it instead would be a silent edit of what the program returned.
+const argUndef = await ptc.runProgram({ program: 'return { ok: true, missing: undefined }' })
+ok('a returned object carrying an undefined field is invalid output, not silently trimmed',
+  argUndef.error?.kind === 'invalid-output', JSON.stringify(argUndef).slice(0, 120))
+
+const plugPort = 3257
+const plugTokenFile = join(tmpdir(), 'vsep-plugin-token-' + process.pid + '.txt')
+rmSync(plugTokenFile, { force: true })
+const plugSrv = ptc.createPtcServer({
+  webPort: plugPort,
+  tokenPath: plugTokenFile,
+  pluginsDir: join(here, '..', 'plugins'),
+  allowQuiesce: true,
+  // A task name that certainly does not exist. The gate is built but never invoked here, and this way a
+  // mistaken invocation fails loudly instead of disabling the machine's real heartbeat from a test.
+  taskName: 'NoSuchTaskForTheSuite',
+  logger: () => {},
+})
+await ptc.listen(plugSrv, { webPort: plugPort })
+const plugToken = readFileSync(plugTokenFile, 'utf8').trim()
+const plugPost = async (body) => {
+  const r = await fetch(`http://127.0.0.1:${plugPort}/ptc/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-vsep-token': plugToken },
+    body: JSON.stringify(body),
+  })
+  return r.json()
+}
+const argHttp = await plugPost({ program: 'return { p: args.port }', args: { port: '4242' } })
+ok('args crosses HTTP', argHttp.value?.p === '4242', JSON.stringify(argHttp).slice(0, 100))
+const argBad = await plugPost({ program: 'return 1', args: 'nope' })
+ok('a non-object args is refused, and the message names the field', /args/.test(argBad.error?.message ?? ''), JSON.stringify(argBad).slice(0, 120))
+
+const plugPage = await (await fetch(`http://127.0.0.1:${plugPort}/`)).text()
+ok('the page renders a parameter box carrying its default', /data-param="port" value="3080"/.test(plugPage))
+ok('the heartbeat strip is rendered when the capability is on', /heartbeat: running/.test(plugPage))
+ok('the merged plugin appears exactly once', (plugPage.match(/data-id="heartbeat"/g) ?? []).length === 1)
+const plugList = await (await fetch(`http://127.0.0.1:${plugPort}/ptc/plugins`)).json()
+ok('params travel to the discovery endpoint too',
+  JSON.stringify(plugList.plugins.find((p) => p.id === 'host')?.params) === JSON.stringify([{ name: 'port', default: '3080' }]))
+ok('the merged plugin is runnable when the switch is on', plugList.plugins.find((p) => p.id === 'heartbeat')?.runnable === true)
+await new Promise((done) => plugSrv.close(done))
+rmSync(plugTokenFile, { force: true })
+
 rmSync(plugDir, { recursive: true, force: true })
 
 // --- extras: external commands as bindings ---------------------------------- //
