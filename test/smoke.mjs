@@ -767,6 +767,56 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(rootDir, { recursive: true, force: true })
 }
 
+// ── the web surface's own log, read by the process that did not write it ─
+// Two processes are involved: `vos web timed` writes the log and the MCP server, loaded by the host,
+// reads it back. Nothing is shared in memory, so the directory is recorded on disk at start-up -- and an
+// empty log has to arrive as a start that said nothing, with the newest start that does have content
+// named beside it. Reporting "0 bytes" on its own is what sends somebody hunting a fault that is a fact.
+{
+  const { mkdtempSync } = await import('node:fs')
+  const base = mkdtempSync(join(tmpdir(), 'vos-weblog-'))
+  const logDir = join(base, 'logs')
+  mkdirSync(logDir, { recursive: true })
+  const statePath = join(base, 'web.last.json')
+  const LF = String.fromCharCode(10)
+
+  ok('a start name is read back as its timestamp', g.startFromName('vos-web-20261127-042139.log') === '2026-11-27T04:21:39', String(g.startFromName('vos-web-20261127-042139.log')))
+  ok('anything else is not a start name', g.startFromName('heartbeat.log') === null && g.startFromName('vos-web-x.log') === null)
+
+  const absent = g.readWebState({ path: statePath })
+  ok('an absent start record is absent, not invented', absent.known === false && /before this record existed/.test(absent.detail), absent.detail)
+
+  g.recordWebStart({ at: '2026-11-27T04:21:39.000Z', pid: 4242, logDir, logFile: join(logDir, 'vos-web-20261127-042139.log'), timed: true, state: 'starting', port: 3250 }, { path: statePath })
+  const started = g.readWebState({ path: statePath })
+  ok('a start record round-trips', started.known === true && started.record.pid === 4242 && started.record.state === 'starting', JSON.stringify(started.record))
+
+  g.recordWebStop({ state: 'stopped', stoppedAt: '2026-11-27T04:30:00.000Z', released: true }, { path: statePath })
+  const stopped = g.readWebState({ path: statePath })
+  ok('a stop merges into the start instead of replacing it', stopped.record.pid === 4242 && stopped.record.state === 'stopped' && stopped.record.released === true, JSON.stringify(stopped.record))
+
+  writeFileSync(join(logDir, 'vos-web-20261127-042139.log'), ['line one', 'line two', 'line three'].join(LF) + LF)
+  writeFileSync(join(logDir, 'vos-web-20261127-043546.log'), '')
+  writeFileSync(join(logDir, 'unrelated.log'), 'not ours')
+
+  const listed = g.listWebLogs(logDir)
+  ok("only the surface's own logs are listed", listed.logs.length === 2 && listed.logs.every((l) => l.name.startsWith('vos-web-')), JSON.stringify(listed.logs.map((l) => l.name)))
+  ok('the newest start comes first', listed.logs[0].name === 'vos-web-20261127-043546.log', listed.logs[0].name)
+
+  const newest = g.readWebLog({ dir: logDir, limit: 5 })
+  ok('an empty newest start is reported as empty rather than as missing', newest.ok === true && newest.empty === true, JSON.stringify({ ok: newest.ok, empty: newest.empty }))
+  ok('and it names the newest start that does have content', newest.newestWithContent?.name === 'vos-web-20261127-042139.log', JSON.stringify(newest.newestWithContent?.name))
+  ok('the detail says that start wrote no line', /wrote no line at all/.test(newest.detail), newest.detail)
+
+  const older = g.readWebLog({ dir: logDir, file: 'vos-web-20261127-042139', limit: 2 })
+  ok('a prefix selects an older start', older.ok === true && older.total === 3 && older.shown === 2, JSON.stringify({ total: older.total, shown: older.shown }))
+  ok('the tail keeps the last lines in order', older.lines.join('|') === 'line two|line three', older.lines.join('|'))
+
+  const missingDir = g.readWebLog({ dir: join(base, 'nope') })
+  ok('a missing directory is a refusal with a reason', missingDir.ok === false && /no such directory|no vos-web logs/.test(missingDir.detail), missingDir.detail)
+
+  rmSync(base, { recursive: true, force: true })
+}
+
 // ── L1 signals / L2 decisions: positive cases ─
 // These rules had no test coverage, and on this machine they had never produced a finding that
 // was not already allowlisted -- so `ask` was always 0. Zero false positives and zero true
@@ -1558,6 +1608,15 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
       for (const piece of m[1].split(',')) {
         const n = piece.trim().split(/\s+as\s+/).pop().trim()
         if (n) imported.add(n)
+      }
+    }
+    // `export { X as Y } from './m.mjs'` uses X as well as naming Y, and this check used to read only
+    // the right-hand side: a correct re-export was reported as "X from './m.mjs'", which reads like a
+    // missing import and is not one. The left-hand side counts as imported, because it is.
+    for (const m of src.matchAll(/export \{([^}]*)\} from/g)) {
+      for (const piece of m[1].split(',')) {
+        const left = piece.trim().split(/\s+as\s+/)[0].trim()
+        if (left) imported.add(left)
       }
     }
     const code = CODE(src)
@@ -3802,11 +3861,11 @@ ok('all six failure kinds are declared', ptc.FAILURE_KINDS.length === 6 && ptc.F
 const ns = ptc.buildBindings()
 ok('one namespace, named tools', ns.length === 1 && ns[0].global === 'tools')
 const boundNames = Object.keys(ns[0].functions)
-ok('16 bindings', boundNames.length === 16, String(boundNames.length))
+ok('17 bindings', boundNames.length === 17, String(boundNames.length))
 ok('volcano_heal is denied and not bound',
   !boundNames.includes('volcano_heal') && ptc.DENIED.includes('volcano_heal'))
 ok('every binding is callable', boundNames.every((n) => typeof ns[0].functions[n] === 'function'))
-ok('discovery lists the same 16', ptc.exposedTools().length === 16)
+ok('discovery lists the same 17', ptc.exposedTools().length === 17)
 ok('discovery carries a schema per tool',
   ptc.exposedTools().every((t) => t.name && t.description && t.inputSchema))
 
@@ -3891,8 +3950,8 @@ function ptcPost(path, obj, overrides = {}) {
 const ptcB = await ptcGet('/ptc/bindings')
 ok('GET /ptc/bindings answers 200', ptcB.status === 200, String(ptcB.status))
 const ptcBJson = JSON.parse(ptcB.body)
-ok('it names the namespace and the 16 tools',
-  ptcBJson.namespace === 'tools' && ptcBJson.tools.length === 16, ptcB.body.slice(0, 120))
+ok('it names the namespace and the 17 tools',
+  ptcBJson.namespace === 'tools' && ptcBJson.tools.length === 17, ptcB.body.slice(0, 120))
 
 const ptcRun = await ptcPost('/ptc/run', { program: 'return { ok: true, n: 1 }' })
 ok('POST /ptc/run answers 200 for a good program', ptcRun.status === 200, String(ptcRun.status))
@@ -4138,8 +4197,8 @@ ok('a gated binding reaches the map only when it is handed over',
 ok('and the discovery list follows the same switch',
   ptc.exposedTools({ gatedTools: qs.quiesceTools() }).some((t) => t.name === 'volcano_quiesce') &&
   !ptc.exposedTools().some((t) => t.name === 'volcano_quiesce'))
-ok('the default surface is unchanged at sixteen when nothing is handed over',
-  ptc.exposedTools().length === 16, String(ptc.exposedTools().length))
+ok('the default surface is unchanged at seventeen when nothing is handed over',
+  ptc.exposedTools().length === 17, String(ptc.exposedTools().length))
 
 rmSync(qDir, { recursive: true, force: true })
 
@@ -4449,11 +4508,16 @@ ok('one bad entry is reported and the good one still loads',
 
 ok('a missing file is a problem, not a throw', extras.loadExtras(join(extrasDir, 'nope.json')).problems.length === 1)
 
+// Counted against the built-in list rather than against a constant. The claim being checked is that
+// extras land in the same namespace, and a hardcoded total here had to be edited every time a tool was
+// added -- so a check about namespaces failed for a reason that had nothing to do with extras.
+const builtInCount = ptc.exposedTools({}).length
 const merged = ptc.buildBindings({ extras: loaded.bindings })
-ok('extras join the same namespace', Object.keys(merged[0].functions).length === 18,
-  String(Object.keys(merged[0].functions).length))
+ok('extras join the same namespace', Object.keys(merged[0].functions).length === builtInCount + loaded.bindings.length,
+  `${Object.keys(merged[0].functions).length} against ${builtInCount} built-in + ${loaded.bindings.length} extra`)
 ok('their names are callable', typeof merged[0].functions.echo_json === 'function')
-ok('discovery lists them too', ptc.exposedTools({ extras: loaded.bindings }).length === 18)
+ok('discovery lists them too', ptc.exposedTools({ extras: loaded.bindings }).length === builtInCount + loaded.bindings.length,
+  String(ptc.exposedTools({ extras: loaded.bindings }).length))
 
 let collided = false
 try {

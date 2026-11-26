@@ -14,6 +14,29 @@
 
 ### Added
 
+- **`volcano_web_log`: the web surface's own log, readable by the process that did not write it.**
+  `vos web timed` has kept a log per start since it landed and nothing could read one back, so after a
+  repair the question "did vos itself complain while I was working" had no answer through this server.
+  The daemon log has had its own reader for a while; this surface had none.
+  - **The directory cannot be assumed.** `--log-dir` moves the logs and the default is
+    `~/.volcano-separator/logs`, so a reader hardcoding either would be wrong on the other machine.
+    `vos web` now writes `~/.volcano-separator/web.last.json` at start-up and updates it at each point
+    where the answer changes — `starting`, `listening`, `failed`, `stopped` — because the reader is a
+    different process: the MCP server is loaded by the host and nothing is shared in memory.
+  - **A start that wrote no line is reported as exactly that**, with the newest start that does have
+    content named beside it. "0 bytes" on its own is what sends somebody hunting a fault that is a fact —
+    and the first log this was tested against had grown from empty to seventeen lines while the tool was
+    being written, which is the other reason not to guess from a single reading.
+  - Eleven checks: the state file round-trip and the merge on stop, the name-to-timestamp parse, newest
+    first, a prefix selecting an older start, the empty-start detail, and a missing directory answered
+    with a reason rather than as an empty record.
+  - **Adding one tool exposed four hardcoded counts and one blind spot in the import lint.**
+    `export { X as Y } from './m.mjs'` uses X as well as naming Y, and the check read only the
+    right-hand side — so a correct re-export was reported as a missing import. Fixed in the checker
+    rather than by rewriting the export. The four assertions naming 16 now say 17, and the two namespace
+    counts derive from `exposedTools({})`: the claim they make is about *where* extras land, not about
+    how many tools exist, and a constant there failed for a reason that had nothing to do with extras.
+
 - **A conversation's tool calls are recorded, because a browser's memory is not evidence.** Every call is
   appended to `~/.volcano-separator/chat-tools.ndjson`: the tool, its arguments (a `vos_ask` prompt reduced
   to its length), the result size, the round, and whether it was refused. The page keeps a step list beside

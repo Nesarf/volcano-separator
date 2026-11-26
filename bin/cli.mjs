@@ -30,6 +30,7 @@ import * as enf from '../lib/enforce.mjs'
 import * as cry from '../lib/crypt.mjs'
 import * as vau from '../lib/vault.mjs'
 import * as chm from '../lib/chamber.mjs'
+import * as weblog from '../lib/weblog.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PROJECT_DIR = resolve(here, '..')
@@ -418,6 +419,20 @@ async function main() {
         log(m)
         if (logStream) logStream.write(`[${new Date().toISOString()}] ${m}\n`)
       }
+      // Where this run's log is, written down for whoever reads it back later. That reader is usually a
+      // different process -- the MCP surface is loaded by the host, this one is typed by a person -- so
+      // the directory cannot be passed in memory and has to be on disk. Recorded whether or not `timed`
+      // was asked for: "the last start kept no log" is an answer, and silence is not.
+      const webState = weblog.recordWebStart({
+        at: new Date().toISOString(),
+        pid: process.pid,
+        logDir,
+        logFile,
+        timed,
+        state: 'starting',
+        host: null,
+        port,
+      }, { logger })
       const server = createPtcServer({ webPort: port, logger, extrasPath, tokenPath, allowQuiesce, allowLlm, taskName: ctx.taskName, pluginsDir })
       const listenStarted = Date.now()
       let addr
@@ -434,6 +449,7 @@ async function main() {
             detail += ` -- held by pid ${holder.identity.pid}` + (holder.identity.path ? ` (${holder.identity.path})` : '')
           }
         }
+        weblog.recordWebStop({ state: 'failed', detail }, { logger })
         if (opts.json) {
           // The exit code matters more than the text here: a launcher that reads only stdout cannot tell a
           // failed start from a successful one that happened to print an error.
@@ -465,12 +481,26 @@ async function main() {
         // A surface that does not answer has no reason to hold a port. Saying so and leaving beats sitting
         // there looking started, which is the failure this project keeps removing.
         const detail = `the socket is bound on ${addr.port} but the surface did not answer: ${probeDetail}`
+        weblog.recordWebStop({ state: 'failed', detail }, { logger })
         if (opts.json) console.log(JSON.stringify({ ok: false, reason: 'not-answering', port: addr.port, detail }))
         else say(C.red('FAIL') + ': ' + detail)
         await new Promise((resolve) => server.close(resolve))
         if (logStream) logStream.end()
         process.exit(2)
       }
+
+      // The record is updated in place at each point where the answer changes, rather than written once
+      // and guessed at later: a reader asking "is it up" is asking about now, and a file saying
+      // `starting` from three hours ago is worse than no file.
+      weblog.recordWebStop({
+        state: 'listening',
+        host: addr.address,
+        port: addr.port,
+        listenMs,
+        probeMs,
+        tools: server.ptcInfo.tools,
+        logFile,
+      }, { logger })
 
       if (opts.json) {
         console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, timed, logFile, listenMs, probeMs, ...server.ptcInfo }))
@@ -506,6 +536,7 @@ async function main() {
       if (released.released) say(C.dim('web: the heartbeat suspension was released'))
       else if (released.ok === false) console.error(C.red('WARN') + `: could not release the heartbeat suspension: ${released.why}`)
       await new Promise((resolve) => server.close(resolve))
+      weblog.recordWebStop({ state: 'stopped', stoppedAt: new Date().toISOString(), released: released.released === true }, { logger })
       say(C.dim('web: closed' + (logFile ? ` -- ${logFile}` : '')))
       if (logStream) logStream.end()
       process.exit(0)

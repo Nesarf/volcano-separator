@@ -147,6 +147,7 @@ completion.
 | Read-only | |
 |---|---|
 | service | `volcano_status` `volcano_doctor` |
+| surface | `volcano_web_log` |
 | machine | `volcano_resources` `volcano_ps` `volcano_redline` |
 | record | `volcano_activity` `volcano_busy` |
 | detection | `volcano_signals` `volcano_decide` `volcano_evidence` |
@@ -160,7 +161,7 @@ reason for needing, removes nothing, and the worst outcome is a slower path to t
 **It does not block.** A healthy service is answered in about 50 ms; a repair that is actually
 needed is handed to its own process and the call returns a receipt, which `volcano_heal_status`
 follows. That split is what let this server's tool timeout come down from thirty minutes to five —
-before it, every one of these sixteen tools shared a timeout chosen for the slowest possible repair.
+before it, every tool here shared a timeout chosen for the slowest possible repair.
 
 There is no `volcano_detain`, `volcano_release`, `volcano_cache_apply` or `volcano_policy_allow`.
 Freezing a process or deleting cache entries are decisions a human should make, and `cache_plan`
