@@ -89,13 +89,25 @@
   - **One unreadable plugin does not hide the rest.** A file with no `// name:` line is reported and
     skipped; a loader that threw on the first one would turn a directory of nine plugins into a
     directory of none.
-  - Eight ship in the repository: a patrol, the process list, signals, the uv cache plan, a port query,
-    an entity query, the accumulated evidence, and **one button for the heartbeat that decides its own
-    direction** — suspend when it is running, give it back when it is suspended. That last one is the
-    first use of the quiesce bindings for something a person would actually do, and it is one button
-    rather than two because "which of these two do I press" is the question the pair existed to remove.
-    The strip in the title bar says which state it is in, read from the live gate at render time, so the
-    page cannot claim "running" while this very server holds the task disabled.
+  - Nine ship in the repository: a patrol, the process list, signals, the uv cache plan, a port query,
+    an entity query, the accumulated evidence, **one button for the heartbeat that decides its own
+    direction** — suspend when it is running, give it back when it is suspended — and a cross-project
+    query described below. The heartbeat one is the first use of the quiesce bindings for something a
+    person would actually do, and it is one button rather than two because "which of these two do I
+    press" is the question the pair existed to remove. The strip in the title bar says which state it is
+    in, read from the live gate at render time, so the page cannot claim "running" while this very
+    server holds the task disabled.
+  - **`inspect` asks two other checkouts about the same file**, in one request: vs says who is using it,
+    torikago says what it is, and nanodesu says whether it is a PyInstaller archive. Nanodesu is a *soft*
+    dependency — it only answers for archives, so declaring it required would grey the plugin out for
+    every other file, and presence is checked at runtime instead of in `needs:`.
+    - Its first real run found **two defects, and neither was in the plugin**. The plugin dropped
+      `stderr`, so nanodesu's refusal arrived as `ok: false` with nothing beside it — a silent failure.
+      And `vsep-extras.json` had been passing `--json` to all three nanodesu bindings, which have no such
+      option, so every one of them had been answering with a bare argparse usage error since the file was
+      written. Nothing had ever called them.
+    - **Wiring that is never used is wiring nobody can vouch for.** "The contract is right" and "it
+      works" are different claims, and only a program that crosses the line tells them apart.
   - **`args` is how a plugin takes an argument at all**, and `// params: port=3080` is how the page knows
     to draw a box for it. Everything is text and the program converts what it needs — `Number(args.port)`
     is one expression, while a type system living in a comment line would need a parser and an error path

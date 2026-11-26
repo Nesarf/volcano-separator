@@ -450,7 +450,7 @@ an undo impossible.
 
 ## The programmatic surface has parts that were checked but never watched — OPEN
 
-**Added:** 2026-11-27 · **Status:** open, three items · **Scope:** the ptc surface, its page, the plugin layer
+**Added:** 2026-11-27 · **Status:** open, two items · **Scope:** the ptc surface, its page, the plugin layer
 
 ### What is finished
 
@@ -459,6 +459,24 @@ suite covers them: 714 checks, including a page whose own script is parsed rathe
 things were verified against the real machine once, by hand — the quiesce pair (`ready` → `disabled` →
 `ready`, record cleared) and the plugin layer end to end through the CLI. What is left is not more
 feature work; it is the parts no assertion in this repository can reach.
+
+### One of the three closed, and it closed by being used
+
+- **A program crosses two projects now.** `plugins/inspect.js` asks vs, torikago and nanodesu about one
+  file in a single request — 2402 ms, all three answered. It is asserted in the suite for its shape only;
+  running it for real needs this machine's extras file, which lives outside the repository on purpose, so
+  a suite that reached into it would fail whenever another project moved. It was run once by hand
+  instead, with the result recorded here.
+  Two real defects surfaced on that first run, and **neither was in the plugin**:
+  - the plugin itself dropped `stderr`, so nanodesu's refusal arrived as `ok: false` with nothing beside
+    it — a silent failure, which is precisely what this tool exists to remove;
+  - `vsep-extras.json` passed `--json` to all three nanodesu bindings, and nanodesu has no such option.
+    Every one of them had been answering with a bare argparse usage error since the file was written,
+    because **nothing had ever called them**. `--plain` is a global flag and must come before the
+    subcommand. Corrected, it now answers with its own judgement: `not a PyInstaller archive (no MEI
+    cookie found)`.
+  That is the whole argument for a cross-project plugin: **wiring that is never used is wiring nobody
+  can vouch for**, and "the contract is right" is not the same claim as "it works".
 
 ### What is open
 
@@ -479,8 +497,7 @@ feature work; it is the parts no assertion in this repository can reach.
 
 - **No program uses two projects at once yet.** Every part is present — built-in tools, the extras
   bindings for torikago and nanodesu, a plugin layer that can offer any of them — and no single program
-  has called across that line. Until one does, "vs is a platform for the other projects" is a claim
-  about wiring rather than about use.
+  has called across that line.
 
 ### One decision that looks like an omission
 

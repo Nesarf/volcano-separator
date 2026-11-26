@@ -4106,8 +4106,16 @@ section('plugins')
 const plug = await import('../lib/plugins.mjs')
 const shipped = plug.loadPlugins(join(here, '..', 'plugins'))
 ok('the shipped plugin directory loads without problems',
-  shipped.plugins.length === 8 && shipped.problems.length === 0,
+  shipped.plugins.length === 9 && shipped.problems.length === 0,
   shipped.plugins.length + ' plugins, ' + shipped.problems.length + ' problems')
+// The cross-project plugin is checked for its shape only. Running it for real needs this machine's
+// extras file, which lives outside the repository on purpose -- a suite that reached into it would be
+// a suite that fails when another project moves. It was run once by hand; see TODO.md.
+const inspectPlugin = shipped.plugins.find((p) => p.id === 'inspect')
+ok('the cross-project plugin is shipped', inspectPlugin !== undefined)
+ok('and it depends on one of its own tools plus one external binding',
+  JSON.stringify(inspectPlugin?.needs) === JSON.stringify(['volcano_entity', 'torikago_json']),
+  JSON.stringify(inspectPlugin?.needs))
 ok('every shipped plugin declares a name and carries a program',
   shipped.plugins.every((p) => p.name && p.program.length > 20))
 
