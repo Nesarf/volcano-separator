@@ -1,0 +1,41 @@
+{
+  "format": "vsep-extras/1",
+  "_note": [
+    "External commands exposed to a program as extra bindings. Load with `vsep ptc --extras <path>`.",
+    "Without the flag the built-in sixteen are the whole surface; this file is the only way anything",
+    "else gets in, because these commands run with your authority and naming them is a decision.",
+    "",
+    "Each entry: name (identifier), command, args, optional acceptsPath / timeoutMs / description.",
+    "acceptsPath appends the program's `path` argument to the end of args, so put the tool's own flags",
+    "before it -- argparse accepts options ahead of a positional argument.",
+    "",
+    "The paths below are placeholders. This example ships with the repository; the file you actually",
+    "use belongs outside it, so a checkout of two other projects is not baked into this one."
+  ],
+  "bindings": [
+    {
+      "name": "torikago_json",
+      "description": "Static triage of one file, as Torikago's own JSON (never executes the target).",
+      "command": "python",
+      "args": ["PATH_TO_TORIKAGO/torikago.py", "--json"],
+      "acceptsPath": true,
+      "timeoutMs": 180000
+    },
+    {
+      "name": "nanodesu_info",
+      "description": "Summarise a PyInstaller archive, as Nanodesu's own JSON (never executes the target).",
+      "command": "python",
+      "args": ["PATH_TO_NANODESU/nanodesu.py", "info", "--json"],
+      "acceptsPath": true,
+      "timeoutMs": 180000
+    },
+    {
+      "name": "nanodesu_verify",
+      "description": "Decompress every entry of an archive and check its lengths.",
+      "command": "python",
+      "args": ["PATH_TO_NANODESU/nanodesu.py", "verify", "--json"],
+      "acceptsPath": true,
+      "timeoutMs": 300000
+    }
+  ]
+}

@@ -288,8 +288,12 @@ async function main() {
       // which would have pointed every later recovery at the wrong port owner. A second meaning for
       // an existing flag is how a convenience becomes a defect.
       const port = Number(opts['web-port']) || ctx.webPort
-      const { createPtcServer, listen, exposedTools, DENIED } = await import('../lib/ptc.mjs')
-      const server = createPtcServer({ webPort: port, logger: (m) => log(m) })
+      // `--extras` is the only way external commands reach this surface. Omitting it leaves the
+      // built-in sixteen as the whole list, which is the default on purpose: the file names commands
+      // that run with this user's authority, so naming it is a decision rather than an accident.
+      const extrasPath = opts.extras ? String(opts.extras) : null
+      const { createPtcServer, listen, DENIED } = await import('../lib/ptc.mjs')
+      const server = createPtcServer({ webPort: port, logger: (m) => log(m), extrasPath })
       let addr
       try {
         addr = await listen(server, { webPort: port })
@@ -300,12 +304,13 @@ async function main() {
         process.exit(1)
       }
       if (opts.json) {
-        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, tools: exposedTools().length }))
+        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, ...server.ptcInfo }))
       } else {
         console.log(`${C.green('ok')} ptc: listening on http://${addr.address}:${addr.port}`)
-        console.log(C.dim(`  GET  /ptc/bindings   ${exposedTools().length} read-only tool(s), with schemas`))
+        console.log(C.dim(`  GET  /ptc/bindings   ${server.ptcInfo.tools} tool(s), with schemas`))
         console.log(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
         console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
+        if (server.ptcInfo.extras) console.log(C.dim(`  extras  : ${server.ptcInfo.extras} external binding(s) from ${extrasPath}`))
         console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
       }
       // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an

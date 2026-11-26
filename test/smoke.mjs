@@ -3871,6 +3871,88 @@ ok('an unknown route answers 404', ptc404.status === 404, String(ptc404.status))
 await new Promise((resolve) => ptcSrv.close(resolve))
 ok('the surface closes', ptcSrv.listening === false)
 
+// --- extras: external commands as bindings ---------------------------------- //
+// The core must keep knowing nothing about any other project, so these are checked with a command
+// this machine already has -- the test runner itself -- rather than with a path to someone's
+// checkout. What is asserted is the contract: load, validate, refuse a collision, run, parse.
+section('extras')
+
+const extrasDir = join(tmpdir(), 'vsep-extras-' + process.pid)
+rmSync(extrasDir, { recursive: true, force: true })
+mkdirSync(extrasDir, { recursive: true })
+const goodExtras = join(extrasDir, 'good.json')
+writeFileSync(goodExtras, JSON.stringify({
+  format: 'vsep-extras/1',
+  bindings: [
+    {
+      name: 'echo_json',
+      description: 'prints a JSON object',
+      command: process.execPath,
+      args: ['-e', 'console.log(JSON.stringify({ hello: "world" }))'],
+      timeoutMs: 30000,
+    },
+    {
+      name: 'echo_plain',
+      description: 'prints text that is not JSON',
+      command: process.execPath,
+      args: ['-e', 'console.log("not json")'],
+      timeoutMs: 30000,
+    },
+  ],
+}))
+
+const extras = await import('../lib/extras.mjs')
+ok('loadExtras exists', typeof extras.loadExtras === 'function')
+ok('runExtra exists', typeof extras.runExtra === 'function')
+
+const loaded = extras.loadExtras(goodExtras)
+ok('a valid file loads both bindings', loaded.bindings.length === 2, loaded.problems.join(' | '))
+ok('and reports no problems', loaded.problems.length === 0, loaded.problems.join(' | '))
+
+const badFormat = join(extrasDir, 'bad-format.json')
+writeFileSync(badFormat, JSON.stringify({ format: 'nonsense', bindings: [] }))
+ok('a wrong format is refused, with the reason', extras.loadExtras(badFormat).problems.length === 1)
+
+const badEntry = join(extrasDir, 'bad-entry.json')
+writeFileSync(badEntry, JSON.stringify({
+  format: 'vsep-extras/1',
+  bindings: [{ name: 'not an identifier', command: 'x' }, { name: 'ok_one', command: 'x' }],
+}))
+const badLoaded = extras.loadExtras(badEntry)
+ok('one bad entry is reported and the good one still loads',
+  badLoaded.problems.length === 1 && badLoaded.bindings.length === 1, badLoaded.problems.join(' | '))
+
+ok('a missing file is a problem, not a throw', extras.loadExtras(join(extrasDir, 'nope.json')).problems.length === 1)
+
+const merged = ptc.buildBindings({ extras: loaded.bindings })
+ok('extras join the same namespace', Object.keys(merged[0].functions).length === 18,
+  String(Object.keys(merged[0].functions).length))
+ok('their names are callable', typeof merged[0].functions.echo_json === 'function')
+ok('discovery lists them too', ptc.exposedTools({ extras: loaded.bindings }).length === 18)
+
+let collided = false
+try {
+  ptc.buildBindings({ extras: [{ name: 'volcano_ps', command: 'x', args: [], timeoutMs: 1000 }] })
+} catch (e) {
+  collided = /already is/.test(String(e?.message ?? ''))
+}
+ok('a name that collides with a built-in throws rather than shadowing it', collided)
+
+const asJson = await extras.runExtra(loaded.bindings[0], {})
+ok('a command that prints JSON is parsed into json', asJson.ok === true && asJson.json?.hello === 'world', JSON.stringify(asJson))
+ok('and its raw text is kept as well', typeof asJson.text === 'string' && asJson.text.includes('world'))
+ok('exit code and timing are reported', asJson.exitCode === 0 && typeof asJson.ms === 'number')
+
+const asText = await extras.runExtra(loaded.bindings[1], {})
+ok('a command that prints prose answers text without inventing json',
+  asText.ok === true && !('json' in asText) && asText.text.includes('not json'))
+
+const missing = await extras.runExtra({ name: 'nope', command: 'definitely-not-a-command', args: [], timeoutMs: 5000 }, {})
+ok('a command that cannot start is ok:false with an error, not a throw',
+  missing.ok === false && typeof missing.error === 'string', JSON.stringify(missing))
+
+rmSync(extrasDir, { recursive: true, force: true })
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')
 if (failures === 0) {

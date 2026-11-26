@@ -207,6 +207,23 @@ security boundary, as Node's own documentation says. What it does have is a fixe
 `require` or `process` in the context, and a deadline. `volcano_heal` is excluded by name: it is the
 one tool that changes the machine, and it already has two callers with their own gates.
 
+### External commands, off by default
+
+`vsep ptc --extras <path>` adds commands described in a small JSON file to the same `tools`
+namespace. Without the flag they do not exist, and the built-in sixteen are the whole surface.
+
+It is a file rather than a handful of hardcoded paths because of the distinction this project keeps
+between *origin* and *dependency*: a resource may be produced elsewhere as long as what runs reads
+nothing outside its own repository. A binding that pointed at `nanodesu.py` would be a dependency in
+the running process, and the first time that checkout moved, the tool would start failing for a
+reason that has nothing to do with supervising anything. The core knows nothing about any other
+project; the person who starts the server names the file, and that naming is the decision.
+
+`extras.example.json` ships with the repository and names no real checkout. A binding runs its
+command and answers `{ ok, exitCode, json?, text }` — `json` only when stdout parsed as JSON, `text`
+always, and a non-zero exit as `ok: false` rather than an exception. It is not a sandbox: the command
+runs with your authority and the arguments the file gives it.
+
 MCP client config:
 
 ```json

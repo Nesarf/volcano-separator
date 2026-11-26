@@ -48,6 +48,8 @@ chamber.mjs      窗口（「寝宫」）—— 承载可视化的那一个
 tools.mjs        工具面：17 个工具的名字、schema，以及那一个 dispatcher（无副作用，可被 import）
 mcp.mjs          MCP 表面（stdio 传输）；工具面已搬到 tools.mjs，这里 re-export
 ptc.mjs          可编程表面：POST /ptc/run 提交一段程序，绑定是 tools.mjs 导出的只读工具
+extras.mjs       可选外部命令绑定：--extras 指定的文件，默认不存在（核心不认识别的工程）
+ui.mjs           网页：读 ui/page.html，填入 bin/panel.json 的九色与绑定列表
 ```
 
 ## 数据流
