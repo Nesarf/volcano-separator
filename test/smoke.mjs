@@ -719,6 +719,54 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   rmSync(dir, { recursive: true, force: true })
 }
 
+// ── the launcher and the reader can name different directories ─
+// The failure this guards ran on this machine from 2026-11-24 to 2026-11-27. `installActivityTask`
+// bakes `activityDir(ctx)` into the vbs at install time, so a later change to TEMP leaves the SYSTEM
+// recorder writing into a directory no reader opens. Both directories were healthy, one of them was
+// twenty records deep, the other fifty-five thousand, and every individual check passed. What was
+// missing was a check that compares the two answers, which is what this section is.
+{
+  const { mkdtempSync } = await import('node:fs')
+  const rootDir = mkdtempSync(join(tmpdir(), 'vos-launcher-'))
+  mkdirSync(join(rootDir, 'bin'), { recursive: true })
+  const vbs = join(rootDir, 'bin', 'activity-task.vbs')
+  const readerCtx = { logDir: join(rootDir, 'reader-side'), profile: 'smoke' }
+  const expected = join(rootDir, 'reader-side', 'activity')
+  const CRLF = String.fromCharCode(13, 10)
+
+  const absent = g.launcherLogDir({ projectDir: rootDir })
+  ok('an absent launcher is reported as absent, not as agreement', absent.known === false && /never installed/.test(absent.detail), absent.detail)
+  ok('"cannot tell" is kept apart from "disagrees"', g.launcherAgrees(readerCtx, { projectDir: rootDir }).agrees === null)
+
+  // The doubled quotes are how the generator writes it, not a convenience of this test: a VBScript
+  // string escapes its own quotes, and a reader that only handles the single form reads nothing.
+  writeFileSync(vbs, 'sh.Run "x.ps1 -LogDir ""D:\\elsewhere\\activity""", 0, False' + CRLF)
+  const away = g.launcherAgrees(readerCtx, { projectDir: rootDir })
+  ok('a launcher naming another directory is reported as a disagreement', away.agrees === false, `agrees=${away.agrees}`)
+  ok('the disagreement names both directories', away.launcherDir === 'D:\\elsewhere\\activity' && away.expected === expected, `${away.launcherDir} against ${away.expected}`)
+  ok('the disagreement says what it means for the reader', /not what is being written/.test(away.detail), away.detail)
+
+  // Same place, different spelling. A case difference or a trailing separator is not a disagreement
+  // about where the record lives, and reporting it would train the reader to ignore this field --
+  // which is how a real disagreement gets read as noise.
+  writeFileSync(vbs, `sh.Run "x.ps1 -LogDir ""${expected.toUpperCase()}\\""", 0, False` + CRLF)
+  ok('the same directory in a different spelling agrees', g.launcherAgrees(readerCtx, { projectDir: rootDir }).agrees === true)
+
+  // No -LogDir at all. The script then falls back to its own $env:TEMP, which for the SYSTEM account
+  // is C:\Windows\TEMP -- neither agreement nor absence, and the one case where the recorder may be
+  // writing somewhere nobody has ever looked.
+  writeFileSync(vbs, 'sh.Run "x.ps1", 0, False' + CRLF)
+  const noFlag = g.launcherAgrees(readerCtx, { projectDir: rootDir })
+  ok('a launcher without -LogDir is "cannot tell", with the reason', noFlag.agrees === null && /env:TEMP/.test(noFlag.detail), noFlag.detail)
+
+  // And the verdict is carried by the reader every caller already uses, not only by a status command
+  // somebody has to remember to run.
+  const carried = g.readActivity(readerCtx, { limit: 1 })
+  ok('readActivity carries the launcher verdict on every answer', carried.launcher?.expected === expected, JSON.stringify(carried.launcher))
+
+  rmSync(rootDir, { recursive: true, force: true })
+}
+
 // ── L1 signals / L2 decisions: positive cases ─
 // These rules had no test coverage, and on this machine they had never produced a finding that
 // was not already allowlisted -- so `ask` was always 0. Zero false positives and zero true

@@ -358,6 +358,27 @@
 
 ### Fixed
 
+- **Nothing compared where the recorder writes with where its readers look, so three days of the
+  machine's own record went unread.** `launcherLogDir` and `launcherAgrees` read the generated VBS
+  launcher and compare the `-LogDir` inside it against `activityDir(ctx)`, and the verdict now travels
+  on every `readActivity` answer — the reader that reports a complete record from a directory the
+  recorder does not write to is exactly the caller who cannot check a launcher for themselves.
+  `volcano_activity` prints it as a warning, and `activityTaskState` carries it beside the task state,
+  because "the task is Ready" and "the task writes where this tool reads" are two answers and only the
+  first one was ever asked for.
+  - `agrees: null` is kept distinct from `false`. A launcher that is missing, unreadable, or passes no
+    `-LogDir` at all leaves the question unput, and folding that into agreement would make the
+    reassuring reading the default. The no-flag case is its own message: the script then falls back to
+    `$env:TEMP`, which for the SYSTEM account is `C:\Windows\TEMP`.
+  - **The doubled quotes were the first thing the new reader got wrong.** A VBScript string escapes its
+    own quotes, so the real file says `-LogDir ""PATH""`, and a regex written against the single form
+    reads an empty path from a perfectly good launcher. Both forms are handled now, and the test asserts
+    the doubled one, because that is what the generator writes.
+  - Spelling differences are not disagreements: both sides go through `resolve` and a case-insensitive
+    compare, since reporting a trailing separator as a fault would teach the reader to ignore the field.
+  - Seven checks, including one that the verdict is carried by `readActivity` rather than only by the
+    status command somebody has to remember to run.
+
 - **The activity recorder and its reader had been looking at two different directories since 11-24, and
   nothing said so for three days.** `readActivity` reads `activityDir(ctx)`, derived from `tmpdir()` —
   `D:\DaShaoHuo\cache\tmp\volcano-separator\activity` on this machine. The recorder runs as SYSTEM and is
