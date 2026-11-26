@@ -270,7 +270,9 @@ async function main() {
     ...(opts.service ? { service: String(opts.service) } : {}),
   })
   const projectDir = opts.project ? resolve(opts.project) : PROJECT_DIR
-  const log = logFactory(opts.quiet)
+  // `--json` promises stdout carries the result and nothing else, so the progress chatter goes off with it. A
+  // caller piping this into a parser should not have to filter out the tool's own narration first.
+  const log = logFactory(opts.quiet || opts.json)
   const emit = (obj, text) => {
     if (opts.json) console.log(JSON.stringify(obj, null, 2))
     else if (text) console.log(text)
@@ -411,6 +413,7 @@ async function main() {
         if (logStream) logStream.write(`[${new Date().toISOString()}] ${m}\n`)
       }
       const server = createPtcServer({ webPort: port, logger, extrasPath, tokenPath, allowQuiesce, allowLlm, taskName: ctx.taskName, pluginsDir })
+      const listenStarted = Date.now()
       let addr
       try {
         addr = await listen(server, { webPort: port })
@@ -425,15 +428,51 @@ async function main() {
             detail += ` -- held by pid ${holder.identity.pid}` + (holder.identity.path ? ` (${holder.identity.path})` : '')
           }
         }
-        if (opts.json) return emit({ ok: false, detail })
+        if (opts.json) {
+          // The exit code matters more than the text here: a launcher that reads only stdout cannot tell a
+          // failed start from a successful one that happened to print an error.
+          emit({ ok: false, detail })
+          process.exit(1)
+        }
         console.error(C.red('FAIL') + ': ' + detail)
         console.error(C.dim('  to reuse the port: stop that process, or choose another with --web-port'))
         process.exit(1)
       }
+      const listenMs = Date.now() - listenStarted
+
+      // Binding a socket is not the same as answering on it, and the two are confused precisely when something
+      // is wrong. One request to this server's own discovery route is the cheapest way to tell them apart --
+      // borrowed from dsh-web-timed.ps1, which needed the same distinction for a much slower start.
+      const probeStarted = Date.now()
+      let ready = false
+      let probeDetail = ''
+      try {
+        const probe = await fetch(`http://127.0.0.1:${addr.port}/ptc`, { signal: AbortSignal.timeout(5000) })
+        ready = probe.ok
+        if (!probe.ok) probeDetail = `HTTP ${probe.status}`
+      } catch (e) {
+        probeDetail = String(e?.message ?? e)
+      }
+      const probeMs = Date.now() - probeStarted
+
+      if (!ready) {
+        // A surface that does not answer has no reason to hold a port. Saying so and leaving beats sitting
+        // there looking started, which is the failure this project keeps removing.
+        const detail = `the socket is bound on ${addr.port} but the surface did not answer: ${probeDetail}`
+        if (opts.json) console.log(JSON.stringify({ ok: false, reason: 'not-answering', port: addr.port, detail }))
+        else say(C.red('FAIL') + ': ' + detail)
+        await new Promise((resolve) => server.close(resolve))
+        if (logStream) logStream.end()
+        process.exit(2)
+      }
+
       if (opts.json) {
-        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, timed, logFile, ...server.ptcInfo }))
+        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, timed, logFile, listenMs, probeMs, ...server.ptcInfo }))
       } else {
         say(`${C.green('ok')} web: listening on http://${addr.address}:${addr.port}`)
+        // Two numbers, because they answer two questions: how long the port took, and how long the surface took
+        // to answer on it. One "started" would hide which half was slow.
+        say(C.dim(`  ready   : socket in ${listenMs} ms, answer in ${probeMs} ms`))
         say(C.dim(`  GET  /ptc/bindings   ${server.ptcInfo.tools} tool(s), with schemas`))
         say(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
         if (server.ptcInfo.llm) say(C.dim('  POST /ptc/chat       { "messages": [{ "role": "user", "content": "..." }] } -- tools included'))
