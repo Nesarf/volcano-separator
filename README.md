@@ -138,7 +138,8 @@ Options: `--profile <name>` (default `coding-agent`), `--port <n>` (default `907
 |---|---|---|
 | CLI | `bin/cli.mjs` | humans, scripts, the scheduled task |
 | Library | `lib/core.mjs` | other tools (pure Node, zero dependencies) |
-| MCP | `lib/mcp.mjs` | any harness — 17 tools, listed below |
+| MCP | `lib/tools.mjs`, served by `lib/mcp.mjs` | any harness — 17 tools, listed below |
+| PTC | `lib/ptc.mjs`, served by `vsep ptc` | one program that sequences several read-only calls |
 
 The MCP surface is **read-only apart from `heal`**, and that is the design rather than a stage of
 completion.
@@ -165,6 +166,46 @@ There is no `volcano_detain`, `volcano_release`, `volcano_cache_apply` or `volca
 Freezing a process or deleting cache entries are decisions a human should make, and `cache_plan`
 exists so an agent can show a person exactly what a prune would remove and let them run it. An
 agent that can act on its own is a worse failure than one that has to ask.
+
+## The programmatic surface
+
+`vsep ptc` listens on `127.0.0.1:3250` and answers two routes:
+
+| Route | What it does |
+|---|---|
+| `GET /ptc/bindings` | the 16 read-only tools, with the same schemas the MCP surface publishes |
+| `POST /ptc/run` | `{ "program": "...", "timeoutMs": 30000 }` returns `{ "logs": [...], "value": ... }` |
+
+Opening `/` in a browser is the same surface with a face: the binding list on the left, a program
+editor on the right, and the logs, value and error of the last run underneath. Its colours are read
+from `bin/panel.json` at request time — the same nine roles and bevel rule the chamber's window draws
+with — so a colour changed for the window changes the page in the same commit. The pixel-art
+constraint this project has carried since 2026-10-06 applies to a web page as much as to a WinForms
+one.
+
+A program gets one global, `tools`, whose members are the read-only tools. What that buys is
+sequencing without round trips — the check, the action and the re-check in one request:
+
+```js
+const s = await tools.volcano_heal_status({})
+if (!s.ok) {
+  const ps = await tools.volcano_ps({})
+  return { heal: s, processes: ps }
+}
+return { heal: s }
+```
+
+The failure taxonomy is orthogonal, because a budget expiry is not an exception and an abort is not
+a timeout: `exception`, `timeout`, `abort`, `worker-exit`, `invalid-output`, `output-limit`. A
+program that returns nothing is **not** a failure — it is a run that produced logs and no completion
+value, and `value` is simply absent.
+
+Two things this surface is not. It is not a second implementation: the bindings are generated from
+the same `TOOLS` array and dispatch through the same `call()` the MCP server uses, which is why the
+two were split into `lib/tools.mjs` rather than copied. And it is not a sandbox — `node:vm` is not a
+security boundary, as Node's own documentation says. What it does have is a fixed binding list, no
+`require` or `process` in the context, and a deadline. `volcano_heal` is excluded by name: it is the
+one tool that changes the machine, and it already has two callers with their own gates.
 
 MCP client config:
 

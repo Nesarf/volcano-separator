@@ -23,7 +23,9 @@
   "exports": {
     ".": "./lib/core.mjs",
     "./core": "./lib/core.mjs",
-    "./mcp": "./lib/mcp.mjs"
+    "./mcp": "./lib/mcp.mjs",
+    "./tools": "./lib/tools.mjs",
+    "./ptc": "./lib/ptc.mjs"
   },
   "files": [
     "lib/**",
@@ -40,6 +42,7 @@
     "heal": "node bin/cli.mjs heal",
     "doctor": "node bin/cli.mjs doctor",
     "mcp": "node lib/mcp.mjs",
+    "ptc": "node bin/cli.mjs ptc",
     "commands": "node test/commands.mjs"
   },
   "dependencies": {},

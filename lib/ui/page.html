@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>volcano-separator -- ptc</title>
+<style>
+/* palette — replaced at request time with the nine roles read from bin/panel.json */
+:root {
+/*PALETTE_VARS*/
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--frame-dark); color: var(--content-text); }
+body {
+  font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+  padding: 16px;
+  image-rendering: pixelated;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+.shell {
+  max-width: 1000px; margin: 0 auto;
+  background: var(--frame-dark);
+  border: 2px solid var(--frame-dark);
+  box-shadow: inset 1px 1px 0 0 var(--frame-light);
+}
+.titlebar {
+  display: flex; align-items: center; gap: 8px;
+  height: 22px; padding: 0 4px;
+  background: var(--title); color: var(--title-text);
+  border-bottom: 1px solid var(--frame-dark);
+}
+.titlebar .name { flex: 1; letter-spacing: 1px; }
+.titlebar .port { opacity: .75; }
+.close { width: 11px; height: 11px; background: var(--frame-dark); display: grid; place-items: center; }
+.close i { width: 9px; height: 9px; display: block;
+  background:
+    linear-gradient(45deg, transparent 42%, var(--close) 42%, var(--close) 58%, transparent 58%),
+    linear-gradient(-45deg, transparent 42%, var(--close) 42%, var(--close) 58%, transparent 58%);
+}
+.body { display: grid; grid-template-columns: 250px 1fr; gap: 2px; padding: 2px; background: var(--frame-dark); }
+@media (max-width: 720px) { .body { grid-template-columns: 1fr; } }
+.pane { background: var(--well); padding: 6px; min-height: 120px; }
+.pane h2 {
+  margin: 0 0 6px; font-size: 11px; font-weight: normal; letter-spacing: 1px;
+  color: var(--content-text); opacity: .7; text-transform: uppercase;
+}
+ul.bindings { list-style: none; margin: 0; padding: 0; }
+ul.bindings li {
+  padding: 2px 4px; cursor: pointer; border-left: 2px solid transparent;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+ul.bindings li:hover { background: var(--content); border-left-color: var(--frame-light); }
+ul.bindings li.denied { opacity: .45; cursor: not-allowed; text-decoration: line-through; }
+textarea {
+  width: 100%; min-height: 260px; resize: vertical;
+  background: var(--content); color: var(--content-text);
+  border: 1px solid var(--frame-dark); outline: 1px solid var(--frame-light);
+  font: inherit; padding: 6px; caret-color: var(--content-text);
+}
+.row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+button {
+  font: inherit; padding: 3px 10px; cursor: pointer;
+  background: var(--title); color: var(--title-text);
+  border: 1px solid var(--frame-dark); outline: 1px solid var(--frame-light);
+}
+button:hover { background: var(--frame-light); }
+button:active { outline: none; background: var(--content); }
+.hint { opacity: .6; }
+.result { margin-top: 2px; }
+.result h3 {
+  margin: 8px 0 4px; font-size: 11px; font-weight: normal; letter-spacing: 1px;
+  text-transform: uppercase; opacity: .7;
+}
+pre {
+  margin: 0; padding: 6px; background: var(--content); color: var(--content-text);
+  border-left: 2px solid var(--frame-light); white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow: auto;
+}
+pre.err { border-left-color: var(--close); }
+.kind { color: var(--close); }
+.empty { opacity: .5; }
+.warn { color: var(--close); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="titlebar">
+    <span class="name">volcano-separator / ptc</span>
+    <span class="port">127.0.0.1:{{PORT}} v{{VERSION}}</span>
+    <span class="close" aria-hidden="true"><i></i></span>
+  </div>
+  <div class="body">
+    <div class="pane">
+      <h2>bindings</h2>
+      <!--PALETTE_WARN-->
+      <ul class="bindings" id="bindings"><!--TOOLS--><!--DENIED--></ul>
+      <p class="hint">click to insert at the cursor. {{DENIED_COUNT}} excluded.</p>
+    </div>
+    <div class="pane">
+      <h2>program</h2>
+      <textarea id="program" spellcheck="false">const s = await tools.volcano_status({})
+console.log("ok: " + s.ok)
+return { ok: s.ok, text: s.text }</textarea>
+      <div class="row">
+        <button id="run" type="button">run</button>
+        <label class="hint"><input type="checkbox" id="raw"> show raw JSON</label>
+        <span class="hint" id="timing"></span>
+      </div>
+      <div class="result" id="result"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var program = document.getElementById('program')
+  var result = document.getElementById('result')
+  var timing = document.getElementById('timing')
+  var raw = document.getElementById('raw')
+  var NEWLINE = String.fromCharCode(10)
+
+  document.getElementById('bindings').addEventListener('click', function (ev) {
+    var li = ev.target.closest('li')
+    if (!li || li.classList.contains('denied')) return
+    var name = li.getAttribute('data-name')
+    var snippet = 'await tools.' + name + '({})'
+    var start = program.selectionStart
+    var end = program.selectionEnd
+    program.value = program.value.slice(0, start) + snippet + program.value.slice(end)
+    program.focus()
+    program.selectionStart = program.selectionEnd = start + snippet.length
+  })
+
+  function block(title, text, cls) {
+    var h = document.createElement('h3')
+    h.textContent = title
+    var pre = document.createElement('pre')
+    if (cls) pre.className = cls
+    pre.textContent = text
+    return [h, pre]
+  }
+
+  function show(data) {
+    result.innerHTML = ''
+    if (Array.isArray(data.logs) && data.logs.length) {
+      block('logs (' + data.logs.length + ')', data.logs.join(NEWLINE)).forEach(function (n) { result.appendChild(n) })
+    }
+    if ('value' in data && data.value !== undefined) {
+      block('value', JSON.stringify(data.value, null, 2)).forEach(function (n) { result.appendChild(n) })
+    } else if (!data.error) {
+      block('value', '(none -- the program ran and produced no completion value)').forEach(function (n) { result.appendChild(n) })
+    }
+    if (data.error) {
+      var h = document.createElement('h3')
+      h.textContent = 'error'
+      result.appendChild(h)
+      var pre = document.createElement('pre')
+      pre.className = 'err'
+      var kind = document.createElement('span')
+      kind.className = 'kind'
+      kind.textContent = data.error.kind
+      pre.appendChild(kind)
+      pre.appendChild(document.createTextNode(' -- ' + (data.error.message || '')))
+      result.appendChild(pre)
+    }
+    if (!result.children.length) {
+      var p = document.createElement('p')
+      p.className = 'empty'
+      p.textContent = 'nothing came back'
+      result.appendChild(p)
+    }
+  }
+
+  document.getElementById('run').addEventListener('click', function () {
+    var started = Date.now()
+    timing.textContent = 'running'
+    result.innerHTML = ''
+    fetch('/ptc/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ program: program.value })
+    }).then(function (r) {
+      return r.json().then(function (body) { return { status: r.status, body: body } })
+    }).then(function (r) {
+      timing.textContent = r.status + ' in ' + (Date.now() - started) + ' ms'
+      show(r.body)
+    }).catch(function (e) {
+      timing.textContent = 'request failed'
+      show({ error: { kind: 'exception', message: String(e && e.message ? e.message : e) } })
+    })
+  })
+})()
+</script>
+</body>
+</html>

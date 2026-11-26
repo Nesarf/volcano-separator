@@ -159,6 +159,13 @@ Options:
   --force            ignore the "already warm / already healthy" checks
   --require-dsh      do nothing unless a DSH host is running (the heartbeat uses this, so the
                      task can never become a boot auto-start for the daemon)
+  ptc [--web-port N] the programmatic surface. POST /ptc/run carries a program that calls the
+                     read-only tool bindings and returns one structured result; GET /ptc/bindings
+                     lists them with schemas. Listens on DEFAULTS.webPort (3250), which is not the
+                     daemon's port -- killDaemonTree walks up from the daemon's port owner, and
+                     sharing one number would put this tool at the base of its own recovery walk.
+                     --web-port rather than --port, because --port already means the daemon's.
+                     volcano_heal is excluded: it is the one tool that changes the machine.
   entity <pid|path|port> <value>
                      everything known about one process, one file or one port, from every surface
                      at once. A port resolves to the pid holding it now, which is the join back to
@@ -265,6 +272,51 @@ async function main() {
       const r = await g.serve(ctx, { log })
       emit(r, `${r.ok ? C.green('ok') : C.red('FAIL')} serve: ${r.detail}`)
       process.exit(r.ok ? 0 : 1)
+    }
+
+    case 'ptc': {
+      // The programmatic surface: one HTTP request carries a program, the program calls the read-only
+      // tool bindings, one structured result comes back. A repair that is "check, act, check again"
+      // is then one request instead of three round trips, and the sequencing is somewhere testable.
+      //
+      // It listens on `ctx.webPort`, deliberately a different number from `ctx.port`: killDaemonTree
+      // walks up the parent chain from whoever owns the daemon port, so sharing one would put this
+      // tool at the base of its own recovery walk.
+      //
+      // The switch is `--web-port`, not `--port`. `--port` is consumed earlier by resolveContext and
+      // means the DAEMON's port; reusing it here made `ptc --port 3250` rewrite ctx.port as well,
+      // which would have pointed every later recovery at the wrong port owner. A second meaning for
+      // an existing flag is how a convenience becomes a defect.
+      const port = Number(opts['web-port']) || ctx.webPort
+      const { createPtcServer, listen, exposedTools, DENIED } = await import('../lib/ptc.mjs')
+      const server = createPtcServer({ webPort: port, logger: (m) => log(m) })
+      let addr
+      try {
+        addr = await listen(server, { webPort: port })
+      } catch (e) {
+        const detail = `could not listen on ${port}: ${e?.message ?? e}`
+        if (opts.json) return emit({ ok: false, detail })
+        console.error(C.red('FAIL') + ': ' + detail)
+        process.exit(1)
+      }
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, host: addr.address, port: addr.port, tools: exposedTools().length }))
+      } else {
+        console.log(`${C.green('ok')} ptc: listening on http://${addr.address}:${addr.port}`)
+        console.log(C.dim(`  GET  /ptc/bindings   ${exposedTools().length} read-only tool(s), with schemas`))
+        console.log(C.dim('  POST /ptc/run        { "program": "...", "timeoutMs": 30000 }'))
+        console.log(C.dim(`  excluded: ${DENIED.join(', ')} -- the one tool that changes the machine`))
+        console.log(C.dim('  node:vm is not a security boundary; a program is bounded by timeoutMs, not isolated'))
+      }
+      // Stay up until interrupted. Nothing else keeps the loop alive on purpose: a server with an
+      // open handle would too, but relying on that makes the exit path implicit.
+      await new Promise((resolve) => {
+        process.once('SIGINT', resolve)
+        process.once('SIGTERM', resolve)
+      })
+      await new Promise((resolve) => server.close(resolve))
+      console.log(C.dim('ptc: closed'))
+      process.exit(0)
     }
 
     case 'stop': {

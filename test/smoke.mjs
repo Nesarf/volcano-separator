@@ -948,10 +948,14 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   }
   // The MCP surface must be read-only for the same reason -- an agent calling a status tool should
   // not be able to grow the cache. Asserted on the schema, since the schema is the contract.
-  const mcpSrc = readFileSync(join(projectDir, 'lib', 'mcp.mjs'), 'utf8')
+  // Since the tool surface was split out of mcp.mjs, these two live in lib/tools.mjs: the schema and
+  // the dispatcher are what say "deep is opt-in", and neither is the stdio transport's business.
+  // Reading the old file would have gone on failing rather than passing quietly, which is how the
+  // split announced itself.
+  const toolsSrc = readFileSync(join(projectDir, 'lib', 'tools.mjs'), 'utf8')
   ok('the MCP status tool documents its deep flag as not read-only',
-    /deep[\s\S]{0,400}NOT read-only/.test(mcpSrc), 'the deep property lost its warning')
-  ok('the MCP status tool still defaults to no deep', /args\.deep === true/.test(mcpSrc), 'deep stopped being opt-in')
+    /deep[\s\S]{0,400}NOT read-only/.test(toolsSrc), 'the deep property lost its warning')
+  ok('the MCP status tool still defaults to no deep', /args\.deep === true/.test(toolsSrc), 'deep stopped being opt-in')
 }
 
 // ── uv cache prune stages by rename ─
@@ -2973,7 +2977,11 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
   }
 
   const src = stripComments(readFileSync(join(projectDir, 'bin', 'cli.mjs'), 'utf8'))
-  const lib = ['signals.mjs', 'policy.mjs', 'mcp.mjs']
+  // `tools.mjs` and `ptc.mjs` joined this list the day the tool surface was split out of `mcp.mjs`:
+  // the wording this section guards now lives in the first of them, and a file outside the list is a
+  // file where the claim could reappear unnoticed. The list is by name, so adding a lib module means
+  // adding it here -- which is the same trap `neverQuarantine` was, one level up.
+  const lib = ['signals.mjs', 'policy.mjs', 'mcp.mjs', 'tools.mjs', 'ptc.mjs']
     .map((f) => stripComments(readFileSync(join(projectDir, 'lib', f), 'utf8')))
     .join(String.fromCharCode(10))
 
@@ -3730,6 +3738,138 @@ ok('unknown command exits 2', bogus.code === 2, `code ${bogus.code}`)
 
   rmSync(base, { recursive: true, force: true })
 }
+
+// --- ptc ------------------------------------------------------------------- //
+// The programmatic surface. The executor is checked directly, then the two routes over a real
+// socket -- a dispatcher that works in-process and an endpoint that never answers would each pass
+// half of that, so both are checked.
+section('ptc')
+const ptc = await import('../lib/ptc.mjs')
+
+ok('buildBindings exists', typeof ptc.buildBindings === 'function')
+ok('runProgram exists', typeof ptc.runProgram === 'function')
+ok('createPtcServer exists', typeof ptc.createPtcServer === 'function')
+ok('all six failure kinds are declared', ptc.FAILURE_KINDS.length === 6 && ptc.FAILURE_KINDS.includes('timeout'))
+
+const ns = ptc.buildBindings()
+ok('one namespace, named tools', ns.length === 1 && ns[0].global === 'tools')
+const boundNames = Object.keys(ns[0].functions)
+ok('16 bindings', boundNames.length === 16, String(boundNames.length))
+ok('volcano_heal is denied and not bound',
+  !boundNames.includes('volcano_heal') && ptc.DENIED.includes('volcano_heal'))
+ok('every binding is callable', boundNames.every((n) => typeof ns[0].functions[n] === 'function'))
+ok('discovery lists the same 16', ptc.exposedTools().length === 16)
+ok('discovery carries a schema per tool',
+  ptc.exposedTools().every((t) => t.name && t.description && t.inputSchema))
+
+ok('isLosslessJson accepts an ordinary object', ptc.isLosslessJson({ a: 1, b: [true, null, 'x'] }) === true)
+ok('isLosslessJson rejects NaN', ptc.isLosslessJson({ a: NaN }) === false)
+ok('isLosslessJson rejects undefined', ptc.isLosslessJson(undefined) === false)
+ok('isLosslessJson rejects a function', ptc.isLosslessJson({ f: () => 1 }) === false)
+const cyclicValue = { a: 1 }
+cyclicValue.self = cyclicValue
+ok('isLosslessJson rejects a cycle', ptc.isLosslessJson(cyclicValue) === false)
+
+const ptc1 = await ptc.runProgram({
+  program: ['const s = await tools.volcano_evidence({})', 'console.log("x")', 'return { ok: s.ok }'].join('\n'),
+})
+ok('a program can call a bound tool', ptc1.error === undefined && ptc1.value?.ok === true, JSON.stringify(ptc1.error))
+ok('its console output is captured', ptc1.logs.length === 1 && ptc1.logs[0] === 'x', JSON.stringify(ptc1.logs))
+
+const ptc2 = await ptc.runProgram({ program: 'const a = 1' })
+ok('a program that returns nothing is not an error', ptc2.error === undefined && !('value' in ptc2), JSON.stringify(ptc2))
+
+const ptc3 = await ptc.runProgram({ program: 'throw new Error("boom")' })
+ok('a throw is reported as exception', ptc3.error?.kind === 'exception' && /boom/.test(ptc3.error.message))
+
+const ptc4 = await ptc.runProgram({ program: 'await new Promise(() => {})', timeoutMs: 250 })
+ok('a program that never settles is reported as timeout', ptc4.error?.kind === 'timeout')
+
+const ptc5 = await ptc.runProgram({ program: 'return { f: () => 1 }' })
+ok('a non-JSON value is reported as invalid-output', ptc5.error?.kind === 'invalid-output')
+
+const ptc6 = await ptc.runProgram({ program: 'return await tools.volcano_heal({})' })
+ok('an unbound tool raises, so the exclusion is observable',
+  ptc6.error?.kind === 'exception' && /volcano_heal/.test(ptc6.error.message))
+
+const ptc7 = await ptc.runProgram({ program: 'function (' })
+ok('a program that does not parse is reported as exception',
+  ptc7.error?.kind === 'exception' && /did not parse/.test(ptc7.error.message))
+
+const PTC_PORT = 3251
+const ptcSrv = ptc.createPtcServer({ webPort: PTC_PORT })
+const ptcAddr = await ptc.listen(ptcSrv, { webPort: PTC_PORT })
+ok('the surface listens on loopback', ptcAddr.address === '127.0.0.1' && ptcAddr.port === PTC_PORT, JSON.stringify(ptcAddr))
+
+const httpMod = await import('node:http')
+function ptcGet(path) {
+  return new Promise((resolve, reject) => {
+    const req = httpMod.get({ host: '127.0.0.1', port: PTC_PORT, path }, (r) => {
+      let b = ''
+      r.on('data', (c) => (b += c))
+      r.on('end', () => resolve({ status: r.statusCode, body: b }))
+    })
+    req.on('error', reject)
+  })
+}
+function ptcPost(path, obj) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(obj)
+    const req = httpMod.request(
+      { host: '127.0.0.1', port: PTC_PORT, path, method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } },
+      (r) => {
+        let b = ''
+        r.on('data', (c) => (b += c))
+        r.on('end', () => resolve({ status: r.statusCode, body: b }))
+      },
+    )
+    req.on('error', reject)
+    req.write(data)
+    req.end()
+  })
+}
+
+const ptcB = await ptcGet('/ptc/bindings')
+ok('GET /ptc/bindings answers 200', ptcB.status === 200, String(ptcB.status))
+const ptcBJson = JSON.parse(ptcB.body)
+ok('it names the namespace and the 16 tools',
+  ptcBJson.namespace === 'tools' && ptcBJson.tools.length === 16, ptcB.body.slice(0, 120))
+
+const ptcRun = await ptcPost('/ptc/run', { program: 'return { ok: true, n: 1 }' })
+ok('POST /ptc/run answers 200 for a good program', ptcRun.status === 200, String(ptcRun.status))
+ok('and returns the value', JSON.parse(ptcRun.body).value?.n === 1, ptcRun.body)
+
+const ptcBad = await ptcPost('/ptc/run', { program: 'throw new Error("nope")' })
+ok('a throwing program answers 400', ptcBad.status === 400, String(ptcBad.status))
+ok('and the body names the failure kind', JSON.parse(ptcBad.body).error?.kind === 'exception', ptcBad.body)
+
+const ptcPage = await ptcGet('/')
+ok('GET / answers an HTML document', ptcPage.status === 200 && /^<!doctype html>/i.test(ptcPage.body), String(ptcPage.status))
+ok('the page carries the binding list and the editor',
+  /id="bindings"/.test(ptcPage.body) && /id="program"/.test(ptcPage.body) && /id="run"/.test(ptcPage.body))
+ok('the page posts to the run route', /\/ptc\/run/.test(ptcPage.body))
+
+// The look has to come from the same file the chamber's window draws with. Checked by reading the
+// palette here and requiring the page to contain those exact values -- a page with its own colours
+// would pass a "contains a hex colour" test and still be a second palette.
+const uiMod = await import('../lib/ui.mjs')
+const uiPalette = uiMod.loadPalette()
+ok('the palette is readable from bin/panel.json', uiPalette.readable === true, uiPalette.why ?? '')
+ok('it carries all nine roles', Object.keys(uiPalette.hex).length === 9, Object.keys(uiPalette.hex).join(','))
+ok('the page is styled with that palette, not its own',
+  ptcPage.body.includes('--frame-dark: ' + uiPalette.hex.fd) &&
+  ptcPage.body.includes('--content-text: ' + uiPalette.hex.cx) &&
+  ptcPage.body.includes(uiPalette.hex.cm),
+  'the palette and the page disagree')
+
+const ptcJsonRoot = await ptcGet('/ptc')
+ok('GET /ptc still answers JSON for a program', JSON.parse(ptcJsonRoot.body).surface === 'ptc', ptcJsonRoot.body.slice(0, 100))
+
+const ptc404 = await ptcGet('/nothing')
+ok('an unknown route answers 404', ptc404.status === 404, String(ptc404.status))
+
+await new Promise((resolve) => ptcSrv.close(resolve))
+ok('the surface closes', ptcSrv.listening === false)
 
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log('')

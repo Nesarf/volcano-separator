@@ -53,6 +53,46 @@ Already configurable, so **not** the problem:
 | daemon port | `DEFAULTS.port`, `--port` |
 | database port | `DEFAULTS.pgPort` |
 | uv cache directory | `DEFAULTS.uvCacheDir` / `UV_CACHE_DIR` |
+| ptc surface port | `DEFAULTS.webPort`, `ptc --web-port` |
+
+**`DEFAULTS.webPort = 3250` entered the table on 2026-11-27**, the day the endpoint that reads it
+landed (`bin/cli.mjs` `case 'ptc'` -> `lib/ptc.mjs`). It sat outside this table on purpose while it
+had no reader: `DESIGN-enforcement.md` records what happened to `neverQuarantine`, a field whose name
+read like a safeguard and which nothing consulted, removed rather than wired up to justify the name.
+A number with no reader is a decision about a port, not a guarantee about anything, and this row only
+moved up when the reader existed.
+
+It is a separate number from `DEFAULTS.port` (9077) for a reason worth keeping next to both:
+`killDaemonTree()` starts at the owner of `ctx.port` and walks **up** the parent chain, collecting
+only processes that name the daemon or the port. Sharing one port would put this tool itself at the
+base of that walk, and a recovery would then collect the supervisor it was meant to be supervising.
+The CLI switch is `--web-port` for the same reason `--port` is left alone: `--port` is consumed by
+`resolveContext()` and means the daemon's port, so reusing it here would rewrite the port every later
+recovery looks for.
+
+**What landed on 2026-11-27, and the three defects that only showed up while landing it.** The
+programmatic surface (`vsep ptc`, `lib/ptc.mjs`) answers `GET /ptc/bindings` and `POST /ptc/run`, and
+its bindings are generated from the same `TOOLS` the MCP server publishes -- which is why the tool
+surface moved out of `lib/mcp.mjs` into `lib/tools.mjs` instead of being copied. `mcp.mjs` keeps the
+stdio loop and re-exports, so nothing that imported it broke.
+
+Three things went wrong on the way, each worth keeping:
+
+- **A value-less program was reported as an invalid output.** `undefined` fails a lossless-JSON check
+  by design, so the first version called every program that logs and returns nothing an
+  `invalid-output`. The accurate reading is "the run completed and produced no completion value".
+  Caught by the executor probe, not by re-reading the code.
+- **`ptc --port 3250` would have rewritten the daemon's port.** `--port` is consumed by
+  `resolveContext()` and means `ctx.port`; reusing it for the new surface would have pointed every
+  later `killDaemonTree` walk at 3250. The switch is `--web-port`. Caught by following the argument
+  flow after the route already worked.
+- **Three backticks inside the `HELP` template literal ended it early.** Writing `--web-port` as a
+  code span in prose that is itself a template string is a syntax error, and it took 31 unrelated CLI
+  checks down with it. Caught by the suite; the fix is prose without backticks.
+
+`node test/smoke.mjs` reports **597 checks passed** (594 before this work, and that count includes the
+split's collateral). The ptc section covers the binding count, the `volcano_heal` exclusion, six
+failure kinds, `isLosslessJson` on five value shapes, and both routes over a real socket on 3251.
 
 The real blockers, in rough order of how much they cost:
 

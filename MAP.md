@@ -45,7 +45,9 @@ redline.mjs      用户可写空间的扫描
 uvcache.mjs      uv 缓存的清理计划
 platform.mjs     平台差异
 chamber.mjs      窗口（「寝宫」）—— 承载可视化的那一个
-mcp.mjs          MCP 表面（只读工具集）
+tools.mjs        工具面：17 个工具的名字、schema，以及那一个 dispatcher（无副作用，可被 import）
+mcp.mjs          MCP 表面（stdio 传输）；工具面已搬到 tools.mjs，这里 re-export
+ptc.mjs          可编程表面：POST /ptc/run 提交一段程序，绑定是 tools.mjs 导出的只读工具
 ```
 
 ## 数据流
